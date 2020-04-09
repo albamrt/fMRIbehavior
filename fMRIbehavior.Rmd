@@ -6,10 +6,7 @@ knit: (function(input_file, encoding) {
   encoding = encoding,
   output_file = file.path(dirname(input_file), out_dir, 'fMRIbehavior.html'))})
 date: "`r format(Sys.time(), '%d/%m/%y')`"
-output: 
-  html_document:
-    toc: true
-    toc_depth : 2
+output: html_document
 ---
 
 <style type="text/css">
