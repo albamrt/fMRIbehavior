@@ -390,12 +390,17 @@ data %>%
 
 ```{r, fig.align='center', message = FALSE, warning = FALSE, fig.height = 3, fig.width = 8, fig.cap = 'Mean error by subject and group through time'}
 data %>%
-  ggplot(aes(x = time, y = abs(error), color = group, group = subject)) +
-  geom_line(alpha = 0.3, show.legend = FALSE) +
+  ggplot(aes(x = time, y = abs(error), color = group)) +
+  stat_summary(fun.y = mean, geom = 'line', show.legend = FALSE,
+                position = position_dodge(width = 0.05), 
+                aes(group = subject), alpha = 0.3) +
+  facet_wrap(~ group) +
   stat_summary(fun.data = "mean_cl_boot", show.legend = FALSE,
-               position = position_dodge(width = 0.05), aes(group = group)) +
-  stat_summary(fun.y = mean, geom = "line", size = 1, show.legend = FALSE,
-               position = position_dodge(width = 0.05), aes(group = group)) +
+                position = position_dodge(width = 0.05), 
+                aes(group = group)) +
+   stat_summary(fun.y = mean, geom = "line", size = 1, show.legend = FALSE,
+                position = position_dodge(width = 0.05), 
+                aes(group = group)) +
   scale_color_manual(values = colors) +
   theme_minimal(base_size = 15) +
   labs(x = label(data$time), y = "Absolute error", color = label(data$group)) +
