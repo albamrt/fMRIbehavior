@@ -377,7 +377,7 @@ for(i in seq_along(unique(data$group))){
 ```
 
 
-```{r, fig.align='center', message = FALSE, warning = FALSE, fig.height = 40, fig.width = 8, fig.cap = 'Mean error by subject trough time'}
+```{r, fig.align='center', message = FALSE, warning = FALSE, fig.height = 40, fig.width = 8, fig.cap = 'Mean error by subject through time'}
 data %>%
   ggplot(aes(x = time, y = abs(error), color = group)) +
   geom_jitter(width = 0.05, alpha = 0.2, show.legend = FALSE) +
@@ -387,6 +387,26 @@ data %>%
   labs(x = label(data$time), y = "Absolute error", color = label(data$group)) +
   facet_wrap(~ subject, ncol = 4)
 ```
+
+```{r, fig.align='center', message = FALSE, warning = FALSE, fig.height = 3, fig.width = 8, fig.cap = 'Mean error by subject and group through time'}
+data %>%
+  ggplot(aes(x = time, y = abs(error), color = group)) +
+  stat_summary(fun.y = mean, geom = 'line', show.legend = FALSE,
+                position = position_dodge(width = 0.05), 
+                aes(group = subject), alpha = 0.3) +
+  facet_wrap(~ group) +
+  stat_summary(fun.data = "mean_cl_boot", show.legend = FALSE,
+                position = position_dodge(width = 0.05), 
+                aes(group = group)) +
+   stat_summary(fun.y = mean, geom = "line", size = 1, show.legend = FALSE,
+                position = position_dodge(width = 0.05), 
+                aes(group = group)) +
+  scale_color_manual(values = colors) +
+  theme_minimal(base_size = 15) +
+  labs(x = label(data$time), y = "Absolute error", color = label(data$group)) +
+  facet_wrap(~ group)
+```
+
 
 ```{r, fig.height = 3, fig.align='center', fig.cap = 'Mean absolute error by group and session.', out.width = '70%'}
 data %>%
@@ -476,6 +496,34 @@ groupedSubjSes %>%
        group = label(data$group)) 
 ```
 
+```{r, fig.align='center', message = FALSE, warning = FALSE, fig.height = 3, fig.cap = 'Bias by subject and group through time'}
+groupedSubjSes %>%
+  ggplot(aes(x = time, y = bias, color = group, group = subject)) +
+  geom_line(alpha = 0.3, show.legend = FALSE) +
+  stat_summary(fun.data = "mean_cl_boot", show.legend = FALSE,
+               position = position_dodge(width = 0.05), aes(group = group)) +
+  stat_summary(fun.y = mean, geom = "line", size = 1, show.legend = FALSE,
+               position = position_dodge(width = 0.05), aes(group = group)) +
+  scale_color_manual(values = colors) +
+  theme_minimal(base_size = 15) +
+  labs(x = label(data$time), y = "Bias", color = label(data$group)) +
+  facet_wrap(~ group)
+```
+
+
+```{r, fig.align='center', message = FALSE, warning = FALSE, fig.height = 3, fig.cap = 'Precision by subject and group through time'}
+groupedSubjSes %>%
+  ggplot(aes(x = time, y = precision, color = group, group = subject)) +
+  geom_line(alpha = 0.3, show.legend = FALSE) +
+  stat_summary(fun.data = "mean_cl_boot", show.legend = FALSE,
+               position = position_dodge(width = 0.05), aes(group = group)) +
+  stat_summary(fun.y = mean, geom = "line", size = 1, show.legend = FALSE,
+               position = position_dodge(width = 0.05), aes(group = group)) +
+  scale_color_manual(values = colors) +
+  theme_minimal(base_size = 15) +
+  labs(x = label(data$time), y = "Precision", color = label(data$group)) +
+  facet_wrap(~ group)
+```
 
 ```{r}
 summary(lm(precision ~ group * time, data = groupedSubjSes))$coefficients %>%
