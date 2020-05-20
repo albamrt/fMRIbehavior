@@ -1,0 +1,1381 @@
+---
+title: "fMRI behavior"
+knit: (function(input_file, encoding) {
+  out_dir <- 'docs';
+  rmarkdown::render(input_file,
+  encoding = encoding,
+  output_file = file.path(dirname(input_file), out_dir, 'index.html'))})
+date: "`r format(Sys.time(), '%d/%m/%y')`"
+output: html_document
+---
+
+<style type="text/css">
+
+h1.title {
+  font-size: 38px;
+  color: Black;
+  text-align: center;
+}
+h4.date {
+  font-size: 18px;
+  color: Black;
+  text-align: center;
+}
+</style>
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, fig.align='center', fig.pos = 'H')
+options(knitr.kable.NA = '')
+#install.packages(c("circular", "dplyr", "ggforce", "knitr", "lme4", "lmerTest", "Publish", "tidyr", "tidyverse", "Hmisc"))
+library(readr)
+library(Hmisc)
+require(dplyr)
+require(tibble)
+require(tidyverse)
+require(tidyr)
+require(circular)
+require(knitr)
+require(Publish)
+require(ggforce)
+require(nlme)
+require(Hmisc)
+require(reticulate)
+require(data.table)
+require(readxl)
+require(kableExtra)
+require(lme4)
+require(miscTools)
+```
+
+```{r functions}
+# Bays mixture model functions:
+source("/Users/albamorato/Documents/IDIBAPS/ANMDA/MRI/behaviour/precision-mixture-model-master/mixture_model_functions.R")
+
+wrap <- function(Y, bound = pi/2) {
+  X <- ((Y + bound) %% (bound*2)) - bound
+  return(X)
+}
+
+summaryHist <- function(data, variable){
+  ggplot(data, aes(x = data[,variable])) +
+  geom_histogram(aes(y =..density..), bins = 30, color = "gray",
+                 position = 'identity', alpha = 0.4) +
+  labs(x = label(data[,variable]))
+}
+
+dnorm_deriv1 <- function(x, mean = 0, sd = 1) {
+  return(-(x/(sd^2))*dnorm(x, mean = mean, sd = sd))
+} 
+dnorm_deriv3 <- function(x, mean = 0, sd = 1) {
+  return((((-3*x*sd^2)-x^3)/(sd^6))*dnorm(x, mean, sd = 1))
+} 
+
+Fourier <- function (form, q = 1, minq = 0, maxq = 0, crit = "gcv", data = NULL) 
+{
+  cat("Reminder:  first explanatory variable is used for fourier expansion", 
+      "\n")
+  mat <- model.frame(form, data = data)
+  y <- mat[, 1]
+  z <- mat[, 2]
+  n = length(y)
+  nx = ncol(mat) - 2
+  if (nx > 0) {
+    xmat <- as.matrix(mat[, 3:ncol(mat)])
+  }
+  xnames <- colnames(mat)[3:ncol(mat)]
+  minz = min(z)
+  maxz = max(z)
+  z <- 2 * pi * (z - minz)/(maxz - minz)
+  square <- z^2
+  searchq = maxq > minq
+  if (searchq == FALSE) {
+    maxq = q
+  }
+  sinvar <- array(0, dim = c(n, maxq))
+  cosvar <- array(0, dim = c(n, maxq))
+  for (j in seq(1, maxq)) {
+    sinvar[, j] <- sin(j * z)
+    cosvar[, j] <- cos(j * z)
+  }
+  qstar = maxq
+  newform <- y ~ z + square
+  if (nx > 0) {
+    newform <- update(newform, ~. + xmat)
+  }
+  if (searchq == TRUE) {
+    fit <- lm(newform)
+    k = length(fit$coef)
+    sig2 <- mean(residuals(fit)^2)
+    if (crit == "gcv") {
+      critq = n * (n * sig2)/((n - k)^2)
+    }
+    if (crit == "sc") {
+      critq = log(sig2) + log(n) * k/n
+    }
+    if (crit == "aic") {
+      critq = log(sig2) + 2 * k/n
+    }
+    qstar = 0
+    mincrit = critq
+    cat("Information Criterion, Linear:    ", mincrit, "\n")
+    newform <- update(newform, ~. + sinvar[, 1:j] + cosvar[, 
+                                                           1:j])
+    for (j in seq(minq, maxq)) {
+      fit <- lm(newform)
+      k = length(fit$coef)
+      sig2 <- mean(residuals(fit)^2)
+      if (crit == "gcv") {
+        critq = n * (n * sig2)/((n - k)^2)
+      }
+      if (crit == "sc") {
+        critq = log(sig2) + log(n) * k/n
+      }
+      if (crit == "aic") {
+        critq = log(sig2) + 2 * k/n
+      }
+      cat("Information Criterion, q =", j, ":", critq, 
+          "\n")
+      if (critq < mincrit) {
+        qstar = j
+        mincrit = critq
+      }
+    }
+    cat("Information Criterion minimizing q = ", qstar, "\n")
+    if (qstar == maxq) {
+      cat("Warning:  best q = maximum allowed; may want to try higher value for maxq", 
+          "\n")
+    }
+  }
+  maxq = ifelse(searchq == TRUE, qstar, q)
+  newform <- y ~ z + square
+  if (qstar > 0) {
+    sinvar <- as.matrix(sinvar[, 1:maxq])
+    cosvar <- as.matrix(cosvar[, 1:maxq])
+    newform <- update(newform, ~. + sinvar[, 1:maxq] + cosvar[, 
+                                                              1:maxq])
+  }
+  if (nx > 0) {
+    newform <- update(newform, ~. + xmat)
+  }
+  fit <- lm(newform)
+  k = length(fit$coef)
+  sig2 <- mean(residuals(fit)^2)
+  yhat <- fitted(fit)
+  rss = sum(residuals(fit)^2)
+  sig2 = rss/n
+  aic = log(sig2) + 2 * k/n
+  sc = log(sig2) + log(n) * k/n
+  gcv = n * rss/((n - k)^2)
+  fourierhat <- yhat
+  nx1 = 3 + 2 * maxq + 1
+  nx2 = nx1 + nx - 1
+  if (nx > 0) {
+    bhat <- fit$coefficients[nx1:nx2]
+    xbhat <- as.array(as.matrix(xmat) %*% as.matrix(bhat))
+    fourierhat <- yhat - xbhat + mean(xbhat)
+    names(fit$coefficients)[nx1:nx2] <- xnames
+  }
+  names(fit$coefficients)[1:3] <- c("Intercept", "z", "square")
+  sinnames <- paste("sin(", c(1:maxq), sep = "")
+  sinnames <- paste(sinnames, "z)", sep = "")
+  cosnames <- paste("cos(", c(1:maxq), sep = "")
+  cosnames <- paste(cosnames, "z)", sep = "")
+  if(!anyNA(names(fit$coefficients)[4:(4 + maxq - 1)])){
+    names(fit$coefficients)[4:(4 + maxq - 1)] <- sinnames
+    names(fit$coefficients)[(4 + maxq):(4 + 2 * maxq - 1)] <- cosnames
+  }
+  fourierhat <- fourierhat - mean(fourierhat) + mean(y)
+  print(summary(fit))
+  out <- list(yhat, rss, sig2, aic, sc, gcv, fit$coef, fourierhat, 
+              qstar)
+  names(out) <- c("yhat", "rss", "sig2", "aic", "sc", "gcv", 
+                  "coef", "fourierhat", "q")
+  return(yhat)
+}
+
+serial_bias <- function(prevcurr, error, window, step){
+  d <- data.frame(prevcurr = prevcurr, error = error)
+  d <- d[complete.cases(d),]
+    xxx = seq(-pi/2, pi/2, step)
+    m_err <- c()
+    std_err <- c()
+    for(t in xxx){
+      idx = ((d$prevcurr>=t-window/2) & (d$prevcurr<t+window/2))
+      if(t-window/2 < -pi/2){
+        idx = ((d$prevcurr>=t-window/2) & (d$prevcurr<t+window/2) | (d$prevcurr>pi/2-(window/2-(pi/2-abs(t)))))
+      }
+      if(t+window/2 > pi/2){
+        idx = ((d$prevcurr>=t-window/2) & (d$prevcurr<t+window/2) | (d$prevcurr<=pi/2+(window/2-(pi/2-abs(t)))))
+      }
+       m_err <- c(m_err, mean.circular(circular(d$error[idx], 
+                                                units = 'radians', 
+                                                template = 'geographics')))
+        std_err <- c(std_err, (sd.circular(circular(d$error[idx],
+                                            units = 'radians', template = 'geographics'))
+                       /sqrt(sum(idx))))
+    }
+    return(data.frame(x = xxx, m = m_err, sd = std_err, 
+                      yl = m_err - std_err, yh = m_err + std_err))}
+
+
+folded_serial_bias <- function(prevcurr, error, window, step){
+  d <- data.frame(prevcurr = abs(prevcurr), error = error*sign(prevcurr))
+  d <- d[complete.cases(d),]
+    xxx = seq(-pi/2, pi/2, step)
+    m_err <- c()
+    std_err <- c()
+    for(t in xxx){
+      idx = ((d$prevcurr>=t-window/2) & (d$prevcurr<t+window/2))
+       m_err <- c(m_err, mean.circular(circular(d$error[idx], 
+                                                units = 'radians', 
+                                                template = 'geographics')))
+        std_err <- c(std_err, (sd.circular(circular(d$error[idx],
+                                            units = 'radians', template = 'geographics'))
+                       /sqrt(sum(idx))))
+    }
+    return(data.frame(x = xxx, m = m_err, sd = std_err, 
+                      yl = m_err - std_err, yh = m_err + std_err))}
+
+JV10_fit <- function(X, Tg, NT = replicate(NROW(X), 0), uniform = TRUE, return.ll = TRUE) {
+  if(NCOL(X) > 2 | NCOL(Tg) > 1 | NROW(X) != NROW(Tg) | (any(NT != 0) & NROW(NT) != NROW(X) | NROW(NT) != NROW(Tg))) {
+    stop("Error: Input not correctly dimensioned", call. = FALSE)
+  }
+  n = NROW(X)
+  
+  nn = ifelse(any(NT != 0), NCOL(NT), 0)
+  
+  # Start parameters
+  K = c(1, 10, 100)
+  N = c(0.01, 0.1, 0.4)
+  U = c(0.01, 0.1, 0.4)
+  
+  if(nn == 0) {N = 0}
+  if(uniform == FALSE) {U = 0}
+  
+  loglik = -Inf
+  
+  # Parameter estimates
+  for(i in seq_along(K)) {
+    for(j in seq_along(N)) {
+      for(k in seq_along(U)) {
+        est_list = JV10_function(X = X, Tg = Tg, NT = NT, B_start = c(K[i], 1-N[j]-U[k], N[j], U[k]))
+        if (est_list$ll > loglik & !is.nan(est_list$ll) ) {
+          loglik = est_list$ll
+          B = est_list$b
+        }
+      }
+    }
+  }
+  
+  if(return.ll == TRUE) {
+    return(list(B = B, LL = loglik))
+  } else {
+    return(B)
+  }
+}
+```
+
+```{r data}
+data <- read.csv("~/Documents/IDIBAPS/ANMDA/MRI/behaviour/behaviour.csv", sep=";")
+
+# Add continuous time variable (instead of session):
+data$time <- recode(data$session, S1 = 0, S2 = 3, S3 = 6, S4 = 12, S5 = 24) 
+
+# Label data:
+label(data$trial) = "Trial number"
+label(data$block) = "Block number"
+label(data$run) = "Run"
+label(data$type) = "Memory or non-memory trial"
+label(data$S_Angle) = "Stimulus angle (deg)"
+label(data$P_Angle) = "Probe angle (deg)"
+label(data$R_Angle) = "Response angle (deg)"
+label(data$RT) = "Response time"
+label(data$MT) = "MT"
+label(data$ts_b) = "Beginning timestamp"
+label(data$ts_p) = "Probe timestamp"
+label(data$ts_d) = "delay timestamp"
+label(data$ts_r) = "Response timestamp"
+label(data$ts_m) = "Mask timestamp"
+label(data$ts_e) = "End timestamp"
+label(data$m_angle) = "m_angle"
+label(data$m_clock) = "_clock"
+label(data$S_rad) = "Stimulus angle (rad)"
+label(data$P_rad) = "Probe angle (rad)"
+label(data$R_rad) = "Response angle (rad)"
+label(data$prevstim_rad) = "Previous stimulus angle (rad)"
+label(data$prevresp_rad) = "Previous response angle (rad)"
+label(data$prevprob_rad) = "Previous probe angle(rad)"
+label(data$prevmem) = "Previous trial is memory?"
+label(data$futurestim_rad) = "Next stimulus angle (rad)"
+label(data$futureresp_rad) = "Next response angle (rad)"
+label(data$subject) = "Subject"
+label(data$session) = "Session"
+label(data$group) = 'Group'
+label(data$error) = "Error"
+label(data$errorprevstim) = "Previous stim error relative to current stim"
+label(data$errorprevresp) = "Previous resp error relative to current stim"
+label(data$errorprevprobe) = "Previous probe error relative to current stim"
+label(data$diffstim) = "Difference current-previous stim (rad)"
+label(data$diffresp) = "Difference current stim-previous resp (rad)"
+label(data$difffuture) = "Difference current-next stim (rad)"
+label(data$difffutureresp) = "Difference current stim-next resp (rad)"
+label(data$diffprevprob) = "Difference current stim-previous probe (rad)"
+label(data$time) = "Time"
+
+# Remove variables:
+data$m_angle <- NULL
+data$m_clock <- NULL
+
+# exclude session 5:
+data <- data[data$session != 'S5',]
+
+# time from months to years:
+data$time <- data$time/12
+
+# Convert variables to factors:
+data$session <- as.factor(data$session)
+data$session <- droplevels(data$session)
+data$group <- as.factor(data$group)
+data$subject <- as.factor(data$subject)
+
+# Relevel factors:
+data$group <- relevel(data$group, ref = 'C')
+
+# Keep only memory trials:
+data = data[data$type == 1, ]
+
+# time from months to days
+# data$time <- data$time*30
+```
+
+```{r settings}
+colors = c(C = 'gray', E = 'gold4', S = 'tomato3')
+bins = 50
+theme_set(theme_minimal(base_size = 15)) # ggplot theme
+digits = 3 # number of digits to show in tables
+```
+
+# Summary
+
+```{r summary}
+groupedData <- data %>%
+  group_by(group, session) %>%
+  nest() %>%
+  mutate(n = map(.x = data, .f = ~ n_distinct(.x$subject)),
+         n_trials = map(.x = data, .f = ~ nrow(.x))) %>%
+  unnest(c(n, n_trials))
+
+groupedData %>%
+  select(c(session, group, n)) %>%
+  spread(session, n) %>%
+  kable(digits = digits, booktabs = TRUE, escape = FALSE,
+        caption = 'Summary of number of subjects by group and session.',
+        align = c('l', rep('c', length(unique(data$session)) + 1)), 
+        col.names = c(label(data$group), levels(data$session))) %>%
+  kable_styling(position = "float_left",
+              bootstrap_options = "striped", full_width = F) %>%
+  column_spec(1:(length(unique(data$session)) + 1), "2cm") 
+
+
+groupedData %>%
+  select(c(session, group, n_trials)) %>%
+  spread(session, n_trials) %>%
+  kable(digits = digits, booktabs = TRUE, escape = FALSE,
+        caption = 'Summary of number of trials by group and session.',
+        align = c('l', rep('c', length(unique(data$session)) + 1)),
+                col.names = c(label(data$group), levels(data$session))) %>%
+  kable_styling(position = "center",
+                bootstrap_options = "striped", full_width = F) %>%
+  column_spec(1:(length(unique(data$session)) + 1), "2cm") 
+
+```
+
+
+```{r RawPlots, fig.cap = 'Summary of the main variables', fig.show='hold', out.width = '49%', fig.ncol = 2, fig.align='center'}
+summaryHist(data, "S_rad")
+summaryHist(data, "P_rad")
+summaryHist(data, "R_rad")
+summaryHist(data, "error")
+summaryHist(data, "RT")
+```
+```{r}
+# Removing RT>2.8 (as max RT is 3, in these trials they probably needed more time):
+data = data[data$RT<2.8,]
+```
+
+# Error distribution by subject and session
+
+```{r fig.cap = 'Error distribution by subject and session', fig.height = 40, fig.width = 8}
+ggplot(data, aes(x = error, fill = group)) +
+  geom_histogram(aes(y =..density..), bins = 30,
+                 position = 'identity', alpha = 0.4) +
+  scale_fill_manual(values = as.vector(colors)) +
+  scale_color_manual(values = as.vector(colors)) +
+  labs(x = label(data$error), fill = label(data$group))+
+  facet_wrap(~ subject:session, ncol = 4)
+```
+
+# Preprocessing
+
+- We remove the trials where the response time is greater than 2.8 seconds, as the maximum response time is of 3 seconds.
+- We compute the outliers (error>0.7 radians) and remove the subjects with more than 50% of trials being outliers.
+
+
+```{r}
+# Subjects to remove, having more than 50% outlier trials (abs error>0.7):
+outliers <- data %>% 
+  group_by(subject, session) %>%
+  summarise(outliers = sum(abs(error)>0.7), trials = n(), propout = sum(abs(error)>0.7)/n()) %>%
+  filter(propout>0.5)
+
+# Removing these subjects:
+data = data %>% 
+  filter(!(paste(subject, session, sep = '') %in% paste(outliers$subject, outliers$session, sep = '')))
+
+# removing outlier trials 
+#data = data[abs(data$error) < 0.7,]
+```
+
+The excluded subjects are:
+
+```{r}
+kable(outliers, digits = digits, booktabs = TRUE, escape = FALSE,
+      caption = 'Outlier subjects removed from original data.',
+      col.names = c(label(data$subject), label(data$session), 
+                    "Number of outlier trials", "Total number of trials", 
+                    "Proportion of outliers")) %>%
+  kable_styling(latex_options = "HOLD_position", 
+                bootstrap_options = "striped", full_width = F)
+```
+
+
+And now this will be the amount of subjects left by session and group:
+```{r}
+groupedData <- data %>%
+  group_by(group, session) %>%
+  nest() %>%
+  mutate(n = map(.x = data, .f =  ~n_distinct(.x$subject)),
+         n_trials = map(.x = data, .f =  ~nrow(.x))) %>%
+  unnest(c(n, n_trials))
+
+groupedData %>%
+  select(c(session, group, n)) %>%
+  spread(session, n) %>%
+  kable(
+    caption = 'Summary of number of subjects by group and session.',
+    booktabs = TRUE, escape = FALSE,
+    col.names = c(label(data$group), levels(data$session))) %>%
+  kable_styling(latex_options = "HOLD_position", 
+                bootstrap_options = "striped", full_width = F) %>%
+  column_spec(1:(length(unique(data$session)) + 1), "2cm") 
+```
+
+# Response and error distributions for each session by group 
+
+```{r, fig.width = 12, fig.height = 3, fig.cap = 'Response distribution by group for each session.'}
+data %>%
+  ggplot(aes(x = R_rad, fill = group)) + 
+  geom_histogram(aes(y = ..density..), bins = bins,
+                 position = 'identity', alpha = 0.4) +
+  stat_density(geom = "line", alpha = 1, aes(fill = NA, color = group), 
+               position = "identity", show.legend = FALSE) +
+  scale_fill_manual(values = as.vector(colors)) +
+  scale_color_manual(values = colors) +
+  labs(x = label(data$R_rad), fill = label(data$group), color = label(data$group)) +
+  facet_wrap(vars(session), ncol = 4)
+```
+ 
+```{r, fig.width = 12, fig.height = 3, fig.cap = 'Error distribution by group for each session.'}
+data %>%
+  ggplot(aes(x = error, fill = group)) + 
+  geom_histogram(aes(y = ..density..), bins = bins,
+                 position = 'identity', alpha = 0.4) +
+  stat_density(geom = "line", alpha = 1, aes(fill = NA, color = group), 
+               position = "identity", show.legend = FALSE) +
+  scale_fill_manual(values = as.vector(colors)) +
+  scale_color_manual(values = colors) +
+  labs(x = label(data$error), fill = label(data$group), color = label(data$group)) +
+  facet_wrap(vars(session), ncol = 4)
+```
+
+
+# Absolute error
+
+```{r, fig.align='center', message = FALSE, warning = FALSE, fig.height = 10, fig.width = 8, fig.cap = 'Mean absolute error by subject trough time', eval = FALSE, include = FALSE}
+
+for(i in seq_along(unique(data$group))){
+  data %>%
+    filter(group == unique(data$group)[i]) %>%
+    ggplot(aes(x = time, y = abs(error), color = group)) +
+    geom_jitter(width = 0.05, alpha = 0.2, show.legend = FALSE) +
+    stat_summary(fun.y = mean, geom = 'point', size = 1, show.legend = FALSE) +
+    stat_summary(fun.y = mean, geom = 'line', size = 1, show.legend = FALSE) +
+    scale_color_manual(values=colors) +
+    labs(x = label(data$time), y = "Absolute error", color = label(data$group)) +
+    facet_wrap_paginate(~subject, ncol = 4, page = i) -> p
+  print(p)
+}
+```
+
+
+```{r, fig.align='center', message = FALSE, warning = FALSE, fig.height = 40, fig.width = 8, fig.cap = 'Mean error by subject through time'}
+data %>%
+  ggplot(aes(x = time, y = abs(error), color = group)) +
+  geom_jitter(width = 0.05, alpha = 0.2, show.legend = FALSE) +
+  stat_summary(fun.y = mean, geom = 'point', size = 1, show.legend = FALSE) +
+  stat_summary(fun.y = mean, geom = 'line', size = 1, show.legend = FALSE) +
+  scale_color_manual(values=colors) +
+  labs(x = label(data$time), y = "Absolute error", color = label(data$group)) +
+  facet_wrap(~ subject, ncol = 4)
+```
+
+```{r, fig.align='center', message = FALSE, warning = FALSE, fig.height = 3, fig.width = 8, fig.cap = 'Mean error by subject and group through time'}
+data %>%
+  ggplot(aes(x = time, y = abs(error), color = group)) +
+  stat_summary(fun.y = mean, geom = 'line', show.legend = FALSE,
+                position = position_dodge(width = 0.05), 
+                aes(group = subject), alpha = 0.3) +
+  facet_wrap(~ group) +
+  stat_summary(fun.data = "mean_cl_boot", show.legend = FALSE,
+                position = position_dodge(width = 0.05), 
+                aes(group = group)) +
+   stat_summary(fun.y = mean, geom = "line", size = 1, show.legend = FALSE,
+                position = position_dodge(width = 0.05), 
+                aes(group = group)) +
+  scale_color_manual(values = colors) +
+  theme_minimal(base_size = 15) +
+  labs(x = label(data$time), y = "Absolute error", color = label(data$group)) +
+  facet_wrap(~ group)
+```
+
+
+```{r, fig.height = 3, fig.align='center', fig.cap = 'Mean absolute error by group and session.', out.width = '70%'}
+data %>%
+  ggplot(aes(x = time, y = abs(error), color = group, group = group)) +
+  #geom_jitter(width = 0.2, alpha = 0.2, show.legend = FALSE) +
+  stat_summary(fun.data = "mean_cl_boot",
+               position = position_dodge(width=0.05)) +
+  stat_summary(fun.y = mean, geom = "line",  size = 1, show.legend = FALSE,
+               position = position_dodge(width=0.05)) +
+  scale_color_manual(values=colors) +
+  labs(x = label(data$time), y = "Absolute error",
+       color = label(data$group), group = label(data$group))
+```
+
+```{r}
+summary(glmer(abs(error) ~ group*time + (1 + time | subject), 
+      family = Gamma(link="log"), data = data))$coefficients %>%
+  kable(booktabs = TRUE, escape = FALSE, digits = digits,
+        caption = "Generalized linear mixed-effects model (Gamma distribution, log link function) where the response is the absolute error and regressors are group and time, with random effects for the intercept and session.") %>%
+  kable_styling(latex_options = "HOLD_position", 
+                bootstrap_options = "striped", full_width = F) 
+
+# require(CircGLMBayes)
+# m <- circGLM(error ~ group*session, data = data)
+```
+
+# Repulsion from axes
+```{r, fig.align='center', fig.cap = 'Repulsion from axes by group and session.', fig.height = 3, message = FALSE}
+data %>%
+  ggplot(aes(x = S_rad, y = error, color = group, group = group, fill = group)) +
+  geom_smooth(alpha = 0.2) +
+  scale_color_manual(values=colors) +
+  scale_fill_manual(values=colors) +
+  facet_grid(~session) +
+  labs(x = 'Stimulus postion (rad)', y = "Error",
+       group = label(data$group))
+
+binned <- data %>%
+  mutate(bin = ntile(x = S_rad, n = 10)) %>%
+  group_by(bin, subject, group, time) %>%
+  summarise(mean_error = mean(error)) %>%
+  group_by(subject, group, time) %>%
+  summarise(sd_error = sd(mean_error)) %>%
+  as.data.frame()
+```
+
+
+```{r}
+anova(lm(sd_error ~ group*time, data = binned)) %>%
+  kable(booktabs = TRUE, escape = FALSE, digits = digits,
+        caption = "Linear model where the response is the standard deviation of the mean error computed for each of 10 bins of the stimulus position by subject and timepoint.") %>%
+  kable_styling(latex_options = "HOLD_position", 
+                bootstrap_options = "striped", full_width = F) 
+```
+
+```{r fig.height = 40, fig.width = 8, message = FALSE, results = FALSE}
+data <- data %>%
+  arrange(subject, session, S_rad) 
+fit <- data %>%
+  group_by(subject, time) %>%
+  nest() %>%
+  mutate(Fourier = map(.x = data,
+                       .f = ~as.numeric(Fourier(.x$error ~ .x$S_rad, 
+                                               minq = 1, maxq = 10, crit = "aic"))))
+ 
+data$Fourier <- unlist(fit$Fourier)
+data$fourier_error <- wrap((data$error - data$Fourier), pi/2)
+data$fourier_R <- data$R_rad + data$fourier_error
+```
+
+
+```{r fig.height = 40, fig.width = 8, results = FALSE, fig.cap = 'Fourier expansion fit (dashed line) for the respulsion from axes for every subject (coloured smoothed line) and error of the model (dotted line).'}
+data %>%
+  ggplot(aes(x = S_rad, y = error, color = group, fill = group)) +
+  stat_smooth(alpha = 0.2, method = 'loess', formula = y~x, se = FALSE, n = 100) +
+  geom_line(aes(S_rad, Fourier), col="black", linetype = "dashed") +
+  geom_smooth(aes(S_rad, fourier_error), se = FALSE, col = 'black', 
+              alpha = 0.4, linetype = "dotted", method = 'loess', formula = y~x) +
+  scale_color_manual(values=colors) +
+  scale_fill_manual(values=colors) +
+  facet_wrap(~ subject:session, ncol = 4)
+  labs(x = 'Stimulus postion (rad)', y = "Error",
+       group = 'Group')
+```
+
+```{r message = FALSE, warning = FALSE, fig.cap = 'Repulsion from axes after removing Fourier fit.'}
+data %>%
+  ggplot(aes(x = S_rad, y = fourier_error, color = group, group = group, fill = group)) +
+  geom_smooth(alpha = 0.2) +
+  scale_color_manual(values=colors) +
+  scale_fill_manual(values=colors) +
+  facet_grid(~session) +
+  labs(x = 'Stimulus postion (rad)', y = "Error",
+       group = label(data$group))
+```
+```{r}
+binned2 <- data %>%
+  mutate(bin = ntile(x = S_rad, n = 10)) %>%
+  group_by(bin, subject, group, time) %>%
+  summarise(mean_error = mean(fourier_error)) %>%
+  group_by(subject, group, time) %>%
+  summarise(sd_error = sd(mean_error)) %>%
+  as.data.frame()
+
+anova(lm(sd_error ~ group*time, data = binned2)) %>%
+  kable(booktabs = TRUE, escape = FALSE, digits = digits,
+        caption = "Linear model where the response is the standard deviation of the mean error (after fitting the Fourier expansion) computed for each of 10 bins of the stimulus position by subject and timepoint.") %>%
+  kable_styling(latex_options = "HOLD_position",
+                bootstrap_options = "striped", full_width = F) 
+```
+
+
+
+# Cross-validation
+
+```{r eval = FALSE}
+require(rsample)
+d <- data %>%
+  group_by(session, subject, .drop=TRUE) %>%
+  nest() %>%
+  mutate(folds = map(.x = data, .f = ~mc_cv(data = .x, prop = 0.67,
+                                               times = 100))) %>%
+  unnest(folds) %>%
+  mutate(JV10train = map(.x = splits, .f = ~JV10_fit(X = analysis(.x)$fourier_R, 
+                                                Tg = analysis(.x)$S_rad, return.ll = TRUE))) %>%
+  mutate(JV10train_0 = map(.x = splits, .f = ~JV10_fit(X = analysis(.x)$fourier_R, 
+                                                  Tg = analysis(.x)$S_rad, 
+                                                  uniform = FALSE, return.ll = TRUE))) %>%
+  mutate(LLtest = unlist(map2(.x = splits, .y = JV10train,
+                         .f = ~unique(JV10_likelihood(X = assessment(.x)$fourier_R, 
+                                               Tg = assessment(.x)$S_rad, 
+                                               B = as.matrix(.y$B))$LL)))) %>%
+  mutate(LLtest_0 = unlist(map2(.x = splits, .y = JV10train_0,
+                         .f = ~unique(JV10_likelihood(X = assessment(.x)$fourier_R, 
+                                               Tg = assessment(.x)$S_rad, 
+                                               B = as.matrix(.y$B))$LL)))) %>%
+  summarise(LL = mean(LLtest),
+            LL0 = mean(LLtest_0)) %>%
+  filter(!is.nan(LL))
+
+save(d, file = '/Users/albamorato/Documents/IDIBAPS/ANMDA/MRI/behaviour/d.RData')
+```
+ 
+```{r fig.show='hold', out.width = '49%', fig.ncol = 2, fig.align='center', fig.cap = 'Cross validation of mixture model (Uniform & von Mises) vs a one-component (Von Mises) model.'}
+load(file = '/Users/albamorato/Documents/IDIBAPS/ANMDA/MRI/behaviour/d.RData')
+
+ci_all <- d %>%
+  ungroup() %>%
+  summarise(m0.mean = mean(LL0),
+            m0.sd = sd(LL0),
+            m0.n = n(),
+            m0.se = m0.sd / sqrt(m0.n),
+            m0.lower_ci = m0.mean - qt(1 - (0.05 / 2), m0.n - 1) * m0.se,
+            m0.upper_ci = m0.mean + qt(1 - (0.05 / 2), m0.n - 1) * m0.se,
+            m1.mean = mean(LL),
+            m1.sd = sd(LL),
+            m1.n = n(),
+            m1.se = m1.sd / sqrt(m1.n),
+            m1.lower_ci = m1.mean - qt(1 - (0.05 / 2), m1.n - 1) * m1.se,
+            m1.upper_ci = m1.mean + qt(1 - (0.05 / 2), m1.n - 1) * m1.se)
+  
+ci_long <- reshape(as.data.frame(ci_all), 
+                   direction='long', 
+                   varying = list(mean = c('m0.mean', 'm1.mean'),
+                                         sd = c('m0.sd', 'm1.sd'),
+                                         n = c('m0.n', 'm1.n'),
+                                         se = c('m0.se', 'm1.se'),
+                                         lower_ci = c('m0.lower_ci', 'm1.lower_ci'),
+                                         upper_ci = c('m0.upper_ci', 'm1.upper_ci')),
+                   timevar = 'Model',
+                   times = c('VonMises', 'Mixture'),
+                   v.names = c('mean', 'sd', 'n', 'se', 'lower_ci', 'upper_ci'))
+
+
+ggplot(data = ci_long, aes(x = Model)) + 
+  geom_errorbar(mapping = aes(ymin=lower_ci, ymax=upper_ci), width=.1) +
+  geom_point(aes(y = mean), size=3) +
+  ylab('Log-likelihood')
+
+d$group <- substr(d$subject, 1, 1)
+ci_groups <- d %>%
+  ungroup() %>%
+  group_by(group) %>%
+  summarise(m0.mean = mean(LL0),
+            m0.sd = sd(LL0),
+            m0.n = n(),
+            m0.se = m0.sd / sqrt(m0.n),
+            m0.lower_ci = m0.mean - qt(1 - (0.05 / 2), m0.n - 1) * m0.se,
+            m0.upper_ci = m0.mean + qt(1 - (0.05 / 2), m0.n - 1) * m0.se,
+            m1.mean = mean(LL),
+            m1.sd = sd(LL),
+            m1.n = n(),
+            m1.se = m1.sd / sqrt(m1.n),
+            m1.lower_ci = m1.mean - qt(1 - (0.05 / 2), m1.n - 1) * m1.se,
+            m1.upper_ci = m1.mean + qt(1 - (0.05 / 2), m1.n - 1) * m1.se)
+  
+ci_groups_long <- reshape(as.data.frame(ci_groups), 
+                          direction = 'long', 
+                          varying = list(mean = c('m0.mean', 'm1.mean'),
+                                         sd = c('m0.sd', 'm1.sd'),
+                                         n = c('m0.n', 'm1.n'),
+                                         se = c('m0.se', 'm1.se'),
+                                         lower_ci = c('m0.lower_ci', 'm1.lower_ci'),
+                                         upper_ci = c('m0.upper_ci', 'm1.upper_ci')),
+                          timevar = 'Model',
+                          times = c('VonMises', 'Mixture'),
+                          v.names = c('mean', 'sd', 'n', 'se', 'lower_ci', 'upper_ci'),
+                          idvar = 'group')
+
+
+ggplot(data = ci_groups_long, aes(x = Model, color = group)) + 
+  geom_errorbar(mapping = aes(ymin = lower_ci, ymax=upper_ci), 
+                width=.1, position = position_dodge(0.2)) +
+  geom_point(aes(y = mean), size=3, position = position_dodge(0.2)) +
+  scale_color_manual(values=colors) +
+  ylab('Log-likelihood')
+```
+
+# Bias 
+
+```{r, results = 'asis'}
+groupedSubjSes <- data %>%
+  group_by(session, subject) %>%
+  nest() %>%
+  mutate(JV10e = map(.x = data, .f = ~JV10_error(X = .x$fourier_R, Tg = .x$S_rad))) %>%
+  mutate(JV10 = map(.x = data, .f = ~JV10_fit(X = .x$fourier_R, Tg = .x$S_rad, return.ll = TRUE))) %>%
+  mutate(precision = map_dbl(JV10e, 1), 
+         bias = map_dbl(JV10e, 2),
+         L = unlist(map(.x = JV10, .f = ~.x$LL)),
+         K = unlist(map(.x = JV10, .f = ~.x$B['K'])),
+         Pt = unlist(map(.x = JV10, .f = ~.x$B['Pt'])),
+         Pu = unlist(map(.x = JV10, .f = ~.x$B['Pu'])),
+         sd = k2sd(K),
+         precision_mixture = 1/sd,
+         n = unlist(map(.x = data, .f = ~nrow(.x))),
+         group = substr(subject, 1,1), 
+         time = unlist(map(data, function(x) unique(x['time'])))) 
+
+groupedData <- data %>%
+  group_by(group, session) %>%
+  nest() %>%
+  mutate(JV10e = map(.x = data, .f = ~JV10_error(X = .x$fourier_R, Tg = .x$S_rad))) %>%
+  mutate(JV10 = map(.x = data, .f = ~JV10_fit(X = .x$fourier_R, Tg = .x$S_rad, return.ll = TRUE))) %>%
+  mutate(precision = map_dbl(JV10e, 1), 
+         bias = map_dbl(JV10e, 2),
+         L = unlist(map(.x = JV10, .f = ~.x$LL)),
+         K = unlist(map(.x = JV10, .f = ~.x$B['K'])),
+         Pt = unlist(map(.x = JV10, .f = ~.x$B['Pt'])),
+         Pu = unlist(map(.x = JV10, .f = ~.x$B['Pu'])),
+         sd = k2sd(K),
+         precision_mixture = 1/sd,
+         time = unlist(map(data, function(x) unique(x['time'])))) 
+```
+
+
+
+```{r, results = 'asis', eval = FALSE}
+aux <- unlist(lapply(levels(data$session), function(x) setNames(2,x)))
+aux0 <- apply(expand.grid(c("precision_mixture", "bias"), levels(data$session)), 
+              1, paste, collapse=".")
+aux1 <- apply(expand.grid(c("precision_mixture", "bias"), levels(data$session)), 
+              1, paste, collapse=".")
+groupedData %>%
+  select(group, session, precision_mixture, bias) %>%
+  as.data.frame() %>%
+  reshape(idvar = 'group', timevar = 'session', direction = "wide",
+          v.names = c('precision_mixture', 'bias')) %>%
+  select(c("group", all_of(aux0))) %>%
+  kable(col.names = c(label(data$group), 
+                      rep(c("Precision", "Bias"), length(levels(data$session)))), 
+        row.names = FALSE, booktabs = TRUE, escape = FALSE,
+        caption = "Bias and precision by group and session using the mixture model.",
+        digits = digits) %>%
+  add_header_above(c(" " = 1, aux)) %>%
+  kable_styling(latex_options = "HOLD_position", 
+                bootstrap_options = "striped", full_width = F)
+```
+
+
+```{r fig.cap = 'Bias by group and session using mixture model. Dashed line refers to the model fitted by aggregating data by groups.', fig.show='hold', out.width = '49%', fig.ncol = 2}
+groupedSubjSes %>%
+  ggplot(aes(x = time, y = abs(bias), color = group, group = group)) +
+  geom_point(alpha = 0.2, show.legend = FALSE,
+             position = position_jitterdodge(dodge.width = 0.1, jitter.width = 0.02)) +
+  stat_summary(fun.data = "mean_cl_boot",
+               position=position_dodge(width=0.1)) +
+  stat_summary(fun.y = mean, geom = "line",  size = 1, show.legend = FALSE,
+               position=position_dodge(width=0.1)) +
+    geom_line(data = groupedData, inherit.aes = FALSE, aes(x = time, y = abs(bias), color = group),
+                linetype = "dashed") +
+    scale_color_manual(values=colors) +
+  theme(legend.position=c(.7, .8)) +
+  labs(x = label(data$time), y = "Bias", color = label(data$group), 
+       group = label(data$group)) 
+```
+
+
+```{r, fig.align='center', message = FALSE, warning = FALSE, fig.height = 3, fig.cap = 'Bias by subject and group through time. Dashed line refer to the model fitted by aggregating data by groups.'}
+groupedSubjSes %>%
+  ggplot(aes(x = time, y = abs(bias), color = group, group = subject)) +
+  geom_line(alpha = 0.3, show.legend = FALSE) +
+  stat_summary(fun.data = "mean_cl_boot", show.legend = FALSE,
+               position = position_dodge(width = 0.05), aes(group = group)) +
+  stat_summary(fun.y = mean, geom = "line", size = 1, show.legend = FALSE,
+               position = position_dodge(width = 0.05), aes(group = group)) +
+  geom_line(data = groupedData, inherit.aes = FALSE, aes(x = time, y = abs(bias), color = group),
+            linetype = "dashed", color = 'black') +
+  scale_color_manual(values = colors) +
+  theme_minimal(base_size = 15) +
+  labs(x = label(data$time), y = "Bias", color = label(data$group)) +
+  facet_wrap(~ group)
+```
+
+
+```{r}
+summary(lme(abs(bias) ~ group * time, random = ~(1+group)|subject, data = groupedSubjSes))$tTable %>%
+  kable(digits = digits, booktabs = TRUE, escape = FALSE,
+        caption = 'Linear mixed-effects model where the response is the absolute bias and regressors are group, time and its interaction.') %>%
+    kable_styling(latex_options = "HOLD_position", 
+                bootstrap_options = "striped", full_width = F)
+
+anova(lme(abs(bias) ~ group * time, random = ~(1+group)|subject, data = groupedSubjSes)) %>%
+  kable(digits = digits, booktabs = TRUE, escape = FALSE,
+        caption = "Anova for the linear mixed-effects model where the response is the absolute bias and regressors are group, time and its interaction.") %>%
+    kable_styling(latex_options = "HOLD_position", 
+                bootstrap_options = "striped", full_width = F)
+```
+
+## Bias using slopes 
+
+```{r fig.show='hold', fig.align='center', fig.cap = 'Coloured lines account for the linear model fitted for bias (subject by subject). Black lines are the results of the linear model fitted on the intercept and slope of the subject-models (coloured lines).'}
+bias_mod <- groupedSubjSes %>%
+  group_by(subject) %>%
+  nest() %>%
+  mutate(mod = map(data, function(df) lm(abs(bias) ~ time, data = df)),
+         coefficients = map(mod, function(df) df$coefficients),
+         intercept = map_dbl(coefficients, 1),
+         slope = map_dbl(coefficients, 2), 
+         group = substr(subject, 1, 1),
+         prediction = map(mod, function(x) predict(x)),
+         time = map(data, function(x) x$time))
+
+pred <- expand.grid(group = c('C', 'E', 'S'), time = unique(groupedSubjSes$time))
+pred$intercept <- predict(lm(intercept ~ group, data = bias_mod), newdata = pred)
+pred$slope <- predict(lm(slope ~ group, data = bias_mod), newdata = pred)
+pred <- pred %>%
+  mutate(prediction = intercept + slope*time)
+
+bias_mod %>%
+  unnest(c(prediction, time)) %>%
+  ggplot(aes(x = time, y = prediction, group = subject, color = group)) +
+  geom_line(alpha = 0.6) +
+  geom_line(data = pred, color = 'black', inherit.aes = FALSE, aes(x = time, y = prediction)) +
+  scale_color_manual(values = colors) +
+  labs(y = 'Bias') + 
+  facet_wrap(~group)
+```
+
+
+```{r}
+summary(lm(intercept ~ group,
+            data = bias_mod))$coefficients %>%
+  kable(digits = digits, booktabs = TRUE, escape = FALSE,
+        caption = 'Linear model where the response is the intercept of the linear regression for absolute bias and group is the only regressor.') %>%
+    kable_styling(latex_options = "HOLD_position", 
+                bootstrap_options = "striped", full_width = F)
+
+summary(lm(slope ~ group,
+            data = bias_mod))$coefficients %>%
+  kable(digits = digits, booktabs = TRUE, escape = FALSE,
+        caption = 'Linear model where the response is the slope of the linear regression for absolute bias and group is the only regressor.') %>%
+    kable_styling(latex_options = "HOLD_position", 
+                bootstrap_options = "striped", full_width = F)
+```
+
+```{r fig.cap = 'Intercept and slope from linear model (fitted by subject) of bias.', fig.show='hold', out.width = '49%', fig.ncol = 2, fig.align='center', warning = FALSE, message = FALSE}
+bias_mod %>%
+  ggplot(aes(x = group, y = intercept, color = group)) +
+  geom_jitter(alpha = 0.4, width = 0.1) +
+  stat_summary(fun.data = "mean_cl_normal", show.legend = FALSE,
+              aes(group = group), color = 'black') +
+  scale_color_manual(values = colors) +
+  theme_minimal(base_size = 15) 
+
+bias_mod %>%
+  ggplot(aes(x = group, y = slope, color = group)) +
+  geom_jitter(alpha = 0.7, width = 0.1) +
+  stat_summary(fun.data = "mean_cl_normal", show.legend = FALSE,
+              aes(group = group), color = 'black') +
+  scale_color_manual(values = colors) +
+  theme_minimal(base_size = 15) 
+```
+
+# Precision
+
+```{r fig.cap = 'Precision by group and session using mixture model. Dashed line refers to the model fitted by aggregating data by groups.', fig.show='hold', out.width = '49%', fig.ncol = 2}
+groupedSubjSes %>%
+  ggplot(aes(x = time, y = precision_mixture, color = group, group = group)) +
+  geom_point(alpha = 0.2, show.legend = FALSE,
+             position = position_jitterdodge(dodge.width = 0.1, jitter.width = 0.02)) +
+  stat_summary(fun.data = "mean_cl_boot",
+               position=position_dodge(width=0.1)) +
+  stat_summary(fun.y = mean, geom = "line",  size = 1, show.legend = FALSE,
+               position=position_dodge(width=0.1)) +
+  geom_line(data = groupedData, inherit.aes = FALSE, aes(x = time, y = precision_mixture, color = group),
+  linetype = "dashed") +
+    scale_color_manual(values=colors) +
+  theme(legend.position=c(.7, .8)) +
+  labs(x = label(data$time), y = "Precision", color = label(data$group), 
+       group = label(data$group)) 
+```
+
+
+```{r, fig.align='center', message = FALSE, warning = FALSE, fig.height = 3, fig.cap = 'Precision by subject and group through time. Dashed line refers to the model fitted by aggregating data by groups.'}
+groupedSubjSes %>%
+  ggplot(aes(x = time, y = precision_mixture, color = group, group = subject)) +
+  geom_line(alpha = 0.3, show.legend = FALSE) +
+  stat_summary(fun.data = "mean_cl_boot", show.legend = FALSE,
+               position = position_dodge(width = 0.05), aes(group = group)) +
+  stat_summary(fun.y = mean, geom = "line", size = 1, show.legend = FALSE,
+               position = position_dodge(width = 0.05), aes(group = group)) +
+  geom_line(data = groupedData, inherit.aes = FALSE, aes(x = time, y = precision_mixture, color = group),
+            linetype = "dashed", color = 'black') +
+  scale_color_manual(values = colors) +
+  theme_minimal(base_size = 15) +
+  labs(x = label(data$time), y = "Precision", color = label(data$group)) +
+  facet_wrap(~ group)
+```
+
+
+```{r}
+summary(lme(precision_mixture ~ group * time, random = ~(1+group)|subject, data = groupedSubjSes))$tTable %>%
+  kable(digits = digits, booktabs = TRUE, escape = FALSE,
+        caption = 'Linear mixed-effects model where the response is precision and regressors are group, time and its interaction.') %>%
+    kable_styling(latex_options = "HOLD_position", 
+                bootstrap_options = "striped", full_width = F)
+
+anova(lme(precision_mixture ~ group * time, random = ~(1+group)|subject, data = groupedSubjSes)) %>%
+  kable(digits = digits, booktabs = TRUE, escape = FALSE,
+        caption = "Anova for the linear mixed-effects model where the response is precision and regressors are group, time and its interaction.") %>%
+    kable_styling(latex_options = "HOLD_position", 
+                bootstrap_options = "striped", full_width = F)
+```
+
+## Precision using slopes 
+
+```{r fig.show='hold', fig.align='center', fig.cap = 'Coloured lines account for the linear model fitted for precision (subject by subject). Black lines are the results of the linear model fitted on the intercept and slope of the subject-models (coloured lines).'}
+precision_mod <- groupedSubjSes %>%
+  group_by(subject) %>%
+  nest() %>%
+  mutate(mod = map(data, function(df) lm(precision_mixture ~ time, data = df)),
+         coefficients = map(mod, function(df) df$coefficients),
+         intercept = map_dbl(coefficients, 1),
+         slope = map_dbl(coefficients, 2), 
+         group = substr(subject, 1, 1),
+         prediction = map(mod, function(x) predict(x)),
+         time = map(data, function(x) x$time))
+
+pred <- expand.grid(group = c('C', 'E', 'S'), time = unique(groupedSubjSes$time))
+pred$intercept <- predict(lm(intercept ~ group, data = precision_mod), newdata = pred)
+pred$slope <- predict(lm(slope ~ group, data = precision_mod), newdata = pred)
+pred <- pred %>%
+  mutate(prediction = intercept + slope*time)
+
+precision_mod %>%
+  unnest(c(prediction, time)) %>%
+  ggplot(aes(x = time, y = prediction, group = subject, color = group)) +
+  geom_line(alpha = 0.6) +
+  geom_line(data = pred, color = 'black', inherit.aes = FALSE, aes(x = time, y = prediction)) +
+  scale_color_manual(values = colors) +
+  labs(y = 'Precision') + 
+  facet_wrap(~group)
+```
+
+
+```{r}
+summary(lm(intercept ~ group,
+            data = precision_mod))$coefficients %>%
+  kable(digits = digits, booktabs = TRUE, escape = FALSE,
+        caption = 'Linear model where the response is the intercept of the linear regression for precision and group is the only regressor.') %>%
+    kable_styling(latex_options = "HOLD_position", 
+                bootstrap_options = "striped", full_width = F)
+
+summary(lm(slope ~ group,
+            data = precision_mod))$coefficients %>%
+  kable(digits = digits, booktabs = TRUE, escape = FALSE,
+        caption = 'Linear model where the response is the slope of the linear regression for precision and group is the only regressor.') %>%
+    kable_styling(latex_options = "HOLD_position", 
+                bootstrap_options = "striped", full_width = F)
+```
+
+```{r fig.cap = 'Intercept and slope from linear model (fitted by subject) of precision', fig.show='hold', out.width = '49%', fig.ncol = 2, fig.align='center', warning = FALSE, message = FALSE}
+precision_mod %>%
+  ggplot(aes(x = group, y = intercept, color = group)) +
+  geom_jitter(alpha = 0.4, width = 0.1) +
+  stat_summary(fun.data = "mean_cl_normal", show.legend = FALSE,
+              aes(group = group), color = 'black') +
+  scale_color_manual(values = colors) +
+  theme_minimal(base_size = 15) 
+
+precision_mod %>%
+  ggplot(aes(x = group, y = slope, color = group)) +
+  geom_jitter(alpha = 0.7, width = 0.1) +
+  stat_summary(fun.data = "mean_cl_normal", show.legend = FALSE,
+              aes(group = group), color = 'black') +
+  scale_color_manual(values = colors) +
+  theme_minimal(base_size = 15) 
+```
+
+
+
+# Uniform component
+
+```{r fig.cap = 'P(uniform) by group and session. The median is represented by the solid line, while the dashed line refers to the model fitted by aggregating data by groups.', fig.show='hold', out.width = '49%'}
+groupedSubjSes %>%
+  ggplot(aes(x = time, y = Pu, color = group, group = group)) +
+  geom_point(alpha = 1, show.legend = FALSE,
+             position = position_jitterdodge(dodge.width = 0.15, jitter.width = 0.02)) +
+  #stat_summary(fun.data = "median_cl_boot",
+  #             position=position_dodge(width=0.1)) +
+  stat_summary(fun.y = median, geom = "line",  size = 1, show.legend = FALSE,
+               position=position_dodge(width=0.1), alpha = 0.8) +
+      geom_line(data = groupedData, inherit.aes = FALSE, aes(x = time, y = Pu, color = group),
+                linetype = "dashed") +
+    scale_color_manual(values=colors) +
+  theme(legend.position=c(.7, .8)) +
+  #ylim(c(0, 0.00001)) +
+  labs(x = label(data$time), y = "P(uniform)", color = label(data$group), 
+       group = label(data$group)) 
+```
+
+
+
+```{r, fig.align='center', message = FALSE, warning = FALSE, fig.height = 3, fig.cap = 'P(uniform) by subject and group through time. The dashed line refers to the model fitted by aggregating data by groups.'}
+groupedSubjSes %>%
+  ggplot(aes(x = time, y = Pu, color = group, group = subject)) +
+  geom_line(alpha = 0.3, show.legend = FALSE) +
+  stat_summary(fun.y = median, geom = "line", size = 1, show.legend = FALSE,
+               position = position_dodge(width = 0.05), aes(group = group)) +
+  geom_line(inherit.aes = FALSE, data = groupedData, 
+            aes(x = time, y = Pu), linetype = "dashed", color = 'black') +
+  scale_color_manual(values = colors) +
+  theme_minimal(base_size = 15) +
+  labs(x = label(data$time), y = "P(uniform)", color = label(data$group)) +
+  facet_wrap(~ group)
+```
+
+
+```{r warning = FALSE}
+summary(glm(Pu ~ group * time , data = groupedSubjSes,
+            family = binomial(link = "logit"), weights=n))$coefficients %>%
+  kable(digits = digits, booktabs = TRUE, escape = FALSE,
+        caption = 'Generalized linear model (binomial family, logit link function) where the response is P(uniform) and regressors are group, time and its interaction.') %>%
+    kable_styling(latex_options = "HOLD_position", 
+                bootstrap_options = "striped", full_width = F)
+
+anova(glm(Pu ~ group * time , data = groupedSubjSes,
+            family = binomial(link = "logit"), weights=n)) %>%
+  kable(digits = digits, booktabs = TRUE, escape = FALSE,
+        caption = "Anova for the generalized linear model (binomial family, logit link function) where the response is P(uniform) and regressors are group, time and its interaction.") %>%
+    kable_styling(latex_options = "HOLD_position", 
+                bootstrap_options = "striped", full_width = F)
+```
+
+## Uniform component using slopes
+
+```{r fig.show='hold', fig.align='center', fig.cap = 'Coloured lines accounts for the linear model fitted for the uniform component (subject by subject). Black lines are the results of the linear model fitted on the intercept and slope of the subject-models (coloured lines).'}
+uniform_mod <- groupedSubjSes %>%
+  group_by(subject) %>%
+  nest() %>%
+  mutate(mod = map(data, function(df) lm(Pu ~ time, data = df)),
+         coefficients = map(mod, function(df) df$coefficients),
+         intercept = map_dbl(coefficients, 1),
+         slope = map_dbl(coefficients, 2), 
+         group = substr(subject, 1, 1),
+         prediction = map(mod, function(x) predict(x)),
+         time = map(data, function(x) x$time))
+
+pred <- expand.grid(group = c('C', 'E', 'S'), time = unique(groupedSubjSes$time))
+pred$intercept <- predict(lm(intercept ~ group, data = uniform_mod), newdata = pred)
+pred$slope <- predict(lm(slope ~ group, data = uniform_mod), newdata = pred)
+pred <- pred %>%
+  mutate(prediction = intercept + slope*time)
+
+uniform_mod %>%
+  unnest(c(prediction, time)) %>%
+  ggplot(aes(x = time, y = prediction, group = subject, color = group)) +
+  geom_line(alpha = 0.6) +
+  geom_line(data = pred, color = 'black', inherit.aes = FALSE, aes(x = time, y = prediction)) +
+  scale_color_manual(values = colors) +
+  labs(y = 'Uniform component') + 
+  facet_wrap(~group)
+```
+
+
+```{r}
+summary(lm(intercept ~ group,
+            data = uniform_mod))$coefficients %>%
+  kable(digits = digits, booktabs = TRUE, escape = FALSE,
+        caption = 'Linear model where the response is the intercept of the linear regression for the uniform component weight and group is the only regressor.') %>%
+    kable_styling(latex_options = "HOLD_position", 
+                bootstrap_options = "striped", full_width = F)
+
+summary(lm(slope ~ group,
+            data = uniform_mod))$coefficients %>%
+  kable(digits = digits, booktabs = TRUE, escape = FALSE,
+        caption = 'Linear model where the response is the slope of the linear regression for the uniform component weight and group is the only regressor.') %>%
+    kable_styling(latex_options = "HOLD_position", 
+                bootstrap_options = "striped", full_width = F)
+```
+
+```{r fig.cap = 'Intercept and slope from linear model (fitted by subject) of precision', fig.show='hold', out.width = '49%', fig.ncol = 2, fig.align='center', warning = FALSE, message = FALSE}
+uniform_mod %>%
+  ggplot(aes(x = group, y = intercept, color = group)) +
+  geom_jitter(alpha = 0.4, width = 0.1) +
+  stat_summary(fun.data = "mean_cl_normal", show.legend = FALSE,
+              aes(group = group), color = 'black') +
+  scale_color_manual(values = colors) +
+  theme_minimal(base_size = 15) 
+
+uniform_mod %>%
+  ggplot(aes(x = group, y = slope, color = group)) +
+  geom_jitter(alpha = 0.7, width = 0.1) +
+  stat_summary(fun.data = "mean_cl_normal", show.legend = FALSE,
+              aes(group = group), color = 'black') +
+  scale_color_manual(values = colors) +
+  theme_minimal(base_size = 15) 
+```
+
+# Serial bias
+
+```{r}
+Sigma <- seq(0.1, 1.9, by = 0.1)
+
+
+crossValSigma <- function(sigma, data, derivative = 1){
+  #data$DoG <- ddnorm(data$diffstim, mean = 0, sd = sigma)
+  if(derivative == 1){
+    data$DoG <- dnorm_deriv1(data$diffstim)}
+  else{if(derivative == 3){
+    data$DoG <- dnorm_deriv3(data$diffstim)}}
+  smp_size <- floor(0.67 * nrow(data))
+  train_id <- sample(seq_len(nrow(data)), size = smp_size)
+  train <- data[train_id, ]
+  test <- data[-train_id, ]
+  mod <- lm(fourier_error ~ group*time*DoG, data = train)
+  pred <- predict(mod, test)
+  MSE <- mean((na.omit(pred - test$error))^2)
+  return(MSE)
+}
+```
+
+
+```{r eval = FALSE}
+# DoG: normalized first derivative of a Gaussian with fixed location hyperparameter mu=0
+#Cross-validation to find hyperparameter sigma
+sim <- lapply(Sigma, function(x) replicate(10000, crossValSigma(x, data, derivative = 1)))
+sim3 <- lapply(Sigma, function(x) replicate(10000, crossValSigma(x, data, derivative = 3)))
+
+save(sim, file = '/Users/albamorato/Documents/IDIBAPS/ANMDA/MRI/behaviour/sim.RData')
+save(sim3, file = '/Users/albamorato/Documents/IDIBAPS/ANMDA/MRI/behaviour/sim3.RData')
+
+```
+
+```{r}
+load(file = '/Users/albamorato/Documents/IDIBAPS/ANMDA/MRI/behaviour/sim.RData')
+load(file = '/Users/albamorato/Documents/IDIBAPS/ANMDA/MRI/behaviour/sim3.RData')
+
+mean_SEM <- unlist(lapply(sim, mean))
+min_SEM <- min(mean_SEM)
+sigma <- Sigma[mean_SEM == min_SEM]
+
+mean_SEM3 <- unlist(lapply(sim3, mean))
+min_SEM3 <- min(mean_SEM3)
+sigma3 <- Sigma[mean_SEM3 == min_SEM3]
+
+data$DoG <- dnorm_deriv1(data$diffstim, mean = 0, sd = sigma)
+data$DoG3 <- dnorm_deriv3(data$diffstim, mean = 0, sd = sigma3)
+
+if(min_SEM < min_SEM3){
+  mod <- lme(fourier_error ~ group*time*DoG,  random = ~(1+group+time)|subject, 
+             data = data, na.action = na.omit)
+}else{mod <- lme(fourier_error ~ group*time*DoG3, random = ~(1+group)|subject, 
+                 data = data, na.action = na.omit)
+}
+
+summary(mod)$tTable %>%
+  kable(digits = digits, booktabs = TRUE, escape = FALSE,
+        caption = 'Summary of a linear model where the response is the error and regressors are group, time, a derivative of gaussian and its interaction.') %>%
+    kable_styling(latex_options = "HOLD_position", 
+                bootstrap_options = "striped", full_width = F)
+
+anova(mod) %>%
+  kable(digits = digits, booktabs = TRUE, escape = FALSE,
+        caption = 'Anova of a linear model where the response is the error and regressors are group, time, a derivative of gaussian and its interaction.') %>%
+    kable_styling(latex_options = "HOLD_position", 
+                bootstrap_options = "striped", full_width = F)
+```
+
+```{r}
+# Predictions:
+mod_fit <- data.frame(x = data[,'diffstim'], group = data[, 'group'], 
+                      time = data[,'time'], subject = data[,'subject'])
+mod_fit$session <- factor(mod_fit$time, levels = c(0, 0.25, 0.5, 1, 2), labels = c('S1', 'S2', 'S3', 'S4', 'S5'))
+if('DoG' %in% names(mod$coefficients$fixed)){
+  mod_fit$DoG <- dnorm_deriv1(mod_fit$x, mean = 0, sd = sigma)
+}else{mod_fit$DoG3 <- dnorm_deriv3(mod_fit$x, mean = 0, sd = sigma3)
+}
+mod_fit <- mod_fit[complete.cases(mod_fit),]
+mod_fit$pred <- predict(mod, newdata = mod_fit, level = 0)
+```
+
+
+```{r warning = FALSE}
+window = pi/3
+step = pi/20
+
+gr <- split(data, 
+            list(data$group, data$session), drop = TRUE)
+serialbias <- lapply(gr, function(x) 
+  serial_bias(prevcurr = x$diffstim, error = x$fourier_error, window = window, step = step)) %>%
+  rbindlist(., idcol='id') %>%
+  as.data.frame() %>%
+  mutate(session = substr(id, 3, 4), group = substr(id, 1, 1)) %>%
+  filter(session != 'S5') %>%
+  filter(complete.cases(.))
+
+ggplot(serialbias, aes(x = x, y = m)) +
+  geom_line(linetype = 'dashed', aes(color = group)) +
+  geom_hline(yintercept=0) +
+  geom_ribbon(aes(x = x, ymin = yl, ymax = yh, fill = group), alpha = 0.2) +
+  geom_line(data = mod_fit, aes(x = x, y = pred, color = group), size = 1) +
+  facet_grid(vars(group), vars(session)) +
+  scale_color_manual(values=colors) +
+  scale_fill_manual(values=colors) +
+  ggtitle('Serial bias') + 
+  labs(x = "Difference previous - current stimulus", y = 'Error') 
+```
+
+
+```{r warning = FALSE}
+data %>%
+  ggplot(aes(x = diffstim, y = fourier_error), fill = group) +
+  stat_smooth(aes(fill = group, color = group), linetype = 'dashed', 
+              method = "loess", span = window, alpha = 0.2) +
+  geom_line(data = mod_fit, aes(x = x, y = pred, color = group), size = 1) +
+  geom_hline(yintercept = 0, color = "black") +
+  facet_grid(vars(group), vars(session)) +
+  scale_color_manual(values=colors) +
+  scale_fill_manual(values=colors) + 
+  labs(x = "Difference previous - current stimulus") 
+```
+
+
+```{r warning = FALSE}
+window = pi/5
+step = pi/20
+foldedserialbias <- lapply(gr, function(x) 
+  folded_serial_bias(prevcurr = x$diffstim, error = x$fourier_error, window = window, step = step)) %>%
+  rbindlist(., idcol='id') %>%
+  as.data.frame() %>%
+  mutate(session = substr(id, 3, 4), group = substr(id, 1, 1)) %>%
+  filter(session != 'S5') %>%
+  filter(complete.cases(.))
+
+ggplot(foldedserialbias, aes(x = x, y = m)) +
+  geom_line(linetype = 'dashed', aes(color = group)) +
+  geom_hline(yintercept=0, color = "black") +
+  geom_ribbon(aes(x = x, ymin = yl, ymax = yh, fill = group), alpha = 0.2) +
+  geom_line(data = mod_fit[mod_fit$x>0,], aes(x = x, y = pred, 
+                                                color = group), size = 1) +
+  facet_grid(vars(group), vars(session)) +
+  scale_color_manual(values=colors) +
+  scale_fill_manual(values=colors) +
+  ggtitle('Folded serial bias') + 
+  labs(x = "Difference previous - current stimulus", y = 'Error') 
+```
+
+```{r warning = FALSE}
+data %>%
+  ggplot(aes(x = abs(diffstim), y = fourier_error*sign(diffstim)), fill = group) +
+  stat_smooth(aes(fill = group, color = group), method = "loess", 
+              span = window, linetype = 'dashed', alpha = 0.2) +
+  geom_line(data = mod_fit[mod_fit$x>0,], aes(x = x, y = pred, 
+                                                color = group), size = 1) +
+  geom_hline(yintercept=0, color = "black") +
+  facet_grid(vars(group), vars(session)) +
+  scale_color_manual(values=colors) +
+  scale_fill_manual(values=colors) + 
+  labs(x = "Difference previous - current stimulus", y = 'Error') 
+```
+
+```{r warning = FALSE, fig.height = 40, fig.width = 8, fig.cap = 'Folded serial bias by subject and session', eval = FALSE}
+window = pi/4
+step = pi/20
+
+subj_sb <- split(data, 
+            list(data$subject, data$session), drop = TRUE)
+subj_foldedserialbias <- lapply(subj_sb, function(x) 
+  folded_serial_bias(prevcurr = x$diffstim, error = x$fourier_error, 
+                     window = window, step = step)) %>%
+  rbindlist(., idcol='id') %>%
+  as.data.frame() %>%
+  mutate(session = substr(id, 3, 4), group = substr(id, 1, 1), subject = substr(id, 1, 3)) %>%
+  filter(session != 'S5') %>%
+  filter(complete.cases(.))
+
+ggplot(subj_foldedserialbias, aes(x = x, y = m), color = group) +
+  geom_line() +
+  geom_hline(yintercept=0, color = "black") +
+  geom_ribbon(aes(x = x, ymin = yl, ymax = yh, fill = group), alpha = 0.4) +
+  geom_line(data = mod_fit[mod_fit$x>0,], aes(x = x, y = pred, color = group), size = 1) +
+  facet_wrap(~ subject + session, ncol = 4) +
+  scale_color_manual(values=colors) +
+  scale_fill_manual(values=colors) +
+  ggtitle('Folded serial bias') + 
+  labs(x = "Difference previous - current stimulus", y = 'Error') 
+``` 
+
+```{r fig.height = 60, fig.width = 8, fig.cap = 'Folded serial bias by subject and session', warning = FALSE}
+data %>%
+  ggplot(aes(x = abs(diffstim), y = fourier_error*sign(diffstim)), fill = group) +
+  stat_smooth(aes(fill = group, color = group), method = "loess",
+              span = window, linetype = 'dashed', alpha = 0.2) +
+  geom_hline(yintercept = 0, color = "black") +
+  geom_line(data = mod_fit[mod_fit$x>0,], aes(x = x, y = pred, color = group), size = 1) +
+  facet_wrap(~ subject + session, ncol = 4) +
+  scale_color_manual(values=colors) +
+  scale_fill_manual(values=colors) + 
+  labs(x = "Difference previous - current stimulus", y = 'Error') 
+```

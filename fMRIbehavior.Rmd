@@ -150,6 +150,38 @@ folded_serial_bias <- function(prevcurr, error, window, step){
     }
     return(data.frame(x = xxx, m = m_err, sd = std_err, 
                       yl = m_err - std_err, yh = m_err + std_err))}
+
+fourier_fit <- function(x = NULL, n = NULL, up = 10L, plot = TRUE, add = FALSE, main = NULL, ...){
+  N <- length(x)
+  #The direct transformation
+  #The first frequency is DC, the rest are duplicated
+  dff = fft(x)
+  #The time
+  t = seq(from = 1, to = length(x))
+  #Upsampled time
+  nt = seq(from = 1, to = length(x)+1-1/up, by = 1/up)
+  #New spectrum
+  ndff = array(data = 0, dim = c(length(nt), 1L))
+  ndff[1] = dff[1] #Always, it's the DC component
+  if(n != 0){
+    ndff[2:(n+1)] = dff[2:(n+1)] #The positive frequencies always come first
+    #The negative ones are trickier
+    ndff[length(ndff):(length(ndff) - n + 1)] = dff[length(x):(length(x) - n + 1)]
+  }
+  #The inverses
+  indff = fft(ndff/(N+1), inverse = TRUE)
+  idff = fft(dff/(N+1), inverse = TRUE)
+  if(plot){
+    if(!add){
+      plot(x = t, y = x, pch = 16L, xlab = "Bin", ylab = "Measurement",
+           main = ifelse(is.null(main), paste(n, "harmonics"), main))
+      lines(y = idff, x = t, col = adjustcolor(1L, alpha = 0.5))
+    }
+    lines(y = indff, x = nt, ...)
+  }
+  ret = data.frame(time = nt, y = Mod(indff))
+  return(ret)
+}
 ```
 
 ```{r data}
@@ -480,6 +512,23 @@ anova(lm(sd_error ~ group*time, data = binned)) %>%
                 bootstrap_options = "striped", full_width = F) 
 ```
 
+```{r}
+require(McSpatial)
+require(sjlabelled)
+require(labelled)
+
+fit <- data %>%
+  group_by(subject, time) %>%
+  nest() %>%
+  # mutate(Fourier = map(.x = data, .f = ~fourier(.x$error ~ .x$R_rad, q = 1, crit = "gcv"))) %>%
+  mutate(data = map(.x = data, 
+                    ~ mutate(.x, 
+                             fourier_yhat = unlabelled(fourier(error ~ R_rad, q = 1)$yhat)))) %>%
+  unnest(data) %>%
+  mutate(fourier_error = fourier_yhat - error)
+```
+
+
 # Bias and precision
 
 ```{r, results = 'asis'}
@@ -520,14 +569,14 @@ groupedData %>%
 
 ```{r fig.cap = 'Bias and precision by group and session.', fig.show='hold', out.width = '49%'}
 groupedSubjSes %>%
-  ggplot(aes(x = time, y = bias, color = group, group = group)) +
+  ggplot(aes(x = time, y = abs(bias), color = group, group = group)) +
   geom_jitter(width = 0.2, alpha = 0.2, show.legend = FALSE) +
   stat_summary(fun.data = "mean_cl_boot", show.legend = FALSE,
                position = position_dodge(width=0.05)) +
   stat_summary(fun.y = mean, geom = "line", size = 1, show.legend = FALSE,
                position=position_dodge(width=0.05)) +
     scale_color_manual(values=colors) +
-  labs(x = label(data$time), y = "Bias", 
+  labs(x = label(data$time), y = "Absolute bias", 
        color = label(data$group), group = label(data$group))
 
 groupedSubjSes %>%
@@ -545,7 +594,7 @@ groupedSubjSes %>%
 
 ```{r, fig.align='center', message = FALSE, warning = FALSE, fig.height = 3, fig.cap = 'Bias by subject and group through time'}
 groupedSubjSes %>%
-  ggplot(aes(x = time, y = bias, color = group, group = subject)) +
+  ggplot(aes(x = time, y = abs(bias), color = group, group = subject)) +
   geom_line(alpha = 0.3, show.legend = FALSE) +
   stat_summary(fun.data = "mean_cl_boot", show.legend = FALSE,
                position = position_dodge(width = 0.05), aes(group = group)) +
@@ -553,7 +602,7 @@ groupedSubjSes %>%
                position = position_dodge(width = 0.05), aes(group = group)) +
   scale_color_manual(values = colors) +
   theme_minimal(base_size = 15) +
-  labs(x = label(data$time), y = "Bias", color = label(data$group)) +
+  labs(x = label(data$time), y = "Absolute bias", color = label(data$group)) +
   facet_wrap(~ group)
 ```
 
@@ -573,36 +622,38 @@ groupedSubjSes %>%
 ```
 
 ```{r}
-summary(lm(precision ~ group * time, data = groupedSubjSes))$coefficients %>%
+summary(lme(precision ~ group * time, random = ~(1+group)|subject, data = groupedSubjSes))$varFix %>%
   kable(digits = digits, booktabs = TRUE, escape = FALSE,
-        caption = 'Linear model where the response is precision and regressors are group, time and its interaction.') %>%
+        caption = 'Linear mixed-effects model where the response is precision and regressors are group, time and its interaction.') %>%
     kable_styling(latex_options = "HOLD_position", 
                 bootstrap_options = "striped", full_width = F)
 
-anova(lm(precision ~ group * time, data = groupedSubjSes)) %>%
+anova(lme(precision ~ group * time, random = ~(1+group)|subject, data = groupedSubjSes)) %>%
   kable(digits = digits, booktabs = TRUE, escape = FALSE,
-        caption = "Anova for the linear model where the response is precision and regressors are group, time and its interaction.") %>%
+        caption = "Anova for the linear mixed-effects model where the response is precision and regressors are group, time and its interaction.") %>%
     kable_styling(latex_options = "HOLD_position", 
                 bootstrap_options = "striped", full_width = F)
 ```
 
 
 ```{r }
-summary(lm(abs(bias) ~ group * time, data = groupedSubjSes))$coefficients %>%
+summary(lme(abs(bias) ~ group * time, random = ~(1+group)|subject, data = groupedSubjSes))$varFix %>%
   kable(digits = digits, booktabs = TRUE, escape = FALSE,
-        caption = 'Summary of a linear model where the response is bias and regressors are group, time and its interaction.') %>%
+        caption = 'Linear mixed-effects model where the response is bias and regressors are group, time and its interaction.') %>%
     kable_styling(latex_options = "HOLD_position", 
                 bootstrap_options = "striped", full_width = F)
 
-anova(lm(abs(bias) ~ group * time, data = groupedSubjSes)) %>%
+anova(lme(abs(bias) ~ group * time, random = ~(1+group)|subject, data = groupedSubjSes)) %>%
   kable(digits = digits, booktabs = TRUE, escape = FALSE,
-        caption = 'Anova of a linear model where the response is bias and regressors are group, time and its interaction.') %>%
+        caption = 'Anova of a linear mixed-effects model where the response is bias and regressors are group, time and its interaction.') %>%
     kable_styling(latex_options = "HOLD_position", 
                 bootstrap_options = "striped", full_width = F)
 ```
 
 
 # Serial bias
+
+
 
 ```{r warning = FALSE}
 window = pi/3
@@ -625,9 +676,73 @@ ggplot(serialbias, aes(x = x, y = m), color = group) +
   facet_grid(vars(group), vars(session)) +
   scale_color_manual(values=colors) +
   scale_fill_manual(values=colors) +
-  ggtitle('Folded serial bias') + 
+  ggtitle('Serial bias') + 
   labs(x = "Difference previous - current stimulus", y = 'Error') 
 ```
+
+```{r}
+# DoG: normalized first derivative of a Gaussian with fixed location hyperparameter mu=0
+#Cross-validation to find hyperparameter sigma
+dnorm_deriv1 <- function(x, mean = 0, sd = 1) {
+  return(-(x/(sd^2))*dnorm(x, mean = mean, sd = sd))
+} 
+dnorm_deriv3 <- function(x, mean = 0, sd = 1) {
+  return((((-3*x*sd^2)-x^3)/(sd^6))*dnorm(x, mean, sd = 1))
+} 
+
+crossValSigma <- function(sigma, data, derivative = 1){
+  #data$DoG <- ddnorm(data$diffstim, mean = 0, sd = sigma)
+  if(derivative == 1){
+    data$DoG <- dnorm_deriv1(data$diffstim)}
+  else{if(derivative == 3){
+    data$DoG <- dnorm_deriv3(data$diffstim)}}
+  smp_size <- floor(0.67 * nrow(data))
+  train_id <- sample(seq_len(nrow(data)), size = smp_size)
+  train <- data[train_id, ]
+  test <- data[-train_id, ]
+  mod <- lm(error ~ group*time*DoG, data = train)
+  pred <- predict(mod, test)
+  MSE <- mean((na.omit(pred - test$error))^2)
+  return(MSE)
+}
+
+require(miscTools)
+Sigma <- seq(0.1, 1.9, by = 0.1)
+sim <- lapply(Sigma, function(x) replicate(1000, crossValSigma(x, data, derivative = 1))) 
+mean_SEM <- unlist(lapply(sim, mean))
+min_SEM <- min(mean_SEM)
+sigma <- Sigma[mean_SEM == min_SEM]
+
+sim3 <- lapply(Sigma, function(x) replicate(1000, crossValSigma(x, data, derivative = 3))) 
+mean_SEM3 <- unlist(lapply(sim3, mean))
+min_SEM3 <- min(mean_SEM3)
+sigma3 <- Sigma[mean_SEM3 == min_SEM3]
+
+data$DoG <- dnorm_deriv1(data$diffstim, mean = 0, sd = sigma)
+data$DoG3 <- dnorm_deriv3(data$diffstim, mean = 0, sd = sigma3)
+
+if(min_SEM < min_SEM3){
+  mod <- lme(error ~ group*time*DoG,  random = ~(1+group)|subject, data = data, na.action = na.omit)
+}else{mod <- lme(error ~ group*time*DoG3, random = ~(1+group)|subject, data = data, na.action = na.omit)
+}
+anova(mod) %>%
+  kable(digits = digits, booktabs = TRUE, escape = FALSE,
+        caption = 'Summary of a linear model where the response is the error and regressors are group, time, a derivative of gaussian and its interaction.') %>%
+    kable_styling(latex_options = "HOLD_position", 
+                bootstrap_options = "striped", full_width = F)
+
+
+mod_fit <- expand.grid(x = seq(0, pi/2, 0.05), group = unique(data$group), 
+                       time = unique(data$time))
+mod_fit$session <- factor(mod_fit$time, levels = c(0, 0.25, 0.5, 1, 2), labels = c('S1', 'S2', 'S3', 'S4', 'S5'))
+if(min_SEM < min_SEM3){
+  mod_fit$DoG <- dnorm_deriv1(mod_fit$x, mean = 0, sd = sigma)
+}else{mod_fit$DoG3 <- dnorm_deriv3(mod_fit$x, mean = 0, sd = sigma3)
+}
+mod_fit$pred <- predict(mod, newdata = mod_fit, level = 0)
+
+```
+
 
 
 ```{r warning = FALSE}
@@ -651,6 +766,31 @@ ggplot(serialbiasprevresp, aes(x = x, y = m), color = group) +
 ```
 
 
+```{r warning = FALSE, fig.height = 40, fig.width = 8, fig.cap = 'Folded serial bias by subject and session'}
+window = pi/4
+step = pi/10
+
+subj_sb <- split(data, 
+            list(data$subject, data$session), drop = TRUE)
+subj_foldedserialbias <- lapply(subj_sb, function(x) 
+  folded_serial_bias(prevcurr = x$diffstim, error = x$error, window = window, step = step)) %>%
+  rbindlist(., idcol='id') %>%
+  as.data.frame() %>%
+  mutate(session = substr(id, 3, 4), group = substr(id, 1, 1), subject = substr(id, 1, 3)) %>%
+  filter(session != 'S5') %>%
+  filter(complete.cases(.))
+
+ggplot(subj_foldedserialbias, aes(x = x, y = m), color = group) +
+  geom_line() +
+  geom_hline(yintercept=0, color = "black") +
+  geom_ribbon(aes(x = x, ymin = yl, ymax = yh, fill = group), alpha = 0.4) +
+  facet_wrap(~ subject + session, ncol = 4) +
+  scale_color_manual(values=colors) +
+  scale_fill_manual(values=colors) +
+  ggtitle('Folded serial bias') + 
+  labs(x = "Difference previous - current stimulus", y = 'Error') 
+``` 
+
 ```{r warning = FALSE}
 window = pi/5
 step = pi/20
@@ -666,6 +806,7 @@ ggplot(foldedserialbias, aes(x = x, y = m), color = group) +
   geom_line() +
   geom_hline(yintercept=0, color = "black") +
   geom_ribbon(aes(x = x, ymin = yl, ymax = yh, fill = group), alpha = 0.4) +
+  #geom_line(data = mod_fit, aes(x = x, y = pred)) +
   facet_grid(vars(group), vars(session)) +
   scale_color_manual(values=colors) +
   scale_fill_manual(values=colors) +
