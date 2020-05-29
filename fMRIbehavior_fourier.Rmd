@@ -63,13 +63,6 @@ summaryHist <- function(data, variable){
   labs(x = label(data[,variable]))
 }
 
-dnorm_deriv1 <- function(x, mean = 0, sd = 1) {
-  return(-(x/(sd^2))*dnorm(x, mean = mean, sd = sd))
-} 
-dnorm_deriv3 <- function(x, mean = 0, sd = 1) {
-  return((((-3*x*sd^2)-x^3)/(sd^6))*dnorm(x, mean, sd = 1))
-} 
-
 Fourier <- function (form, q = 1, minq = 0, maxq = 0, crit = "gcv", data = NULL) 
 {
   cat("Reminder:  first explanatory variable is used for fourier expansion", 
@@ -221,7 +214,7 @@ serial_bias <- function(prevcurr, error, window, step){
 folded_serial_bias <- function(prevcurr, error, window, step){
   d <- data.frame(prevcurr = abs(prevcurr), error = error*sign(prevcurr))
   d <- d[complete.cases(d),]
-    xxx = seq(-pi/2, pi/2, step)
+    xxx = seq(0, pi/2, step)
     m_err <- c()
     std_err <- c()
     for(t in xxx){
@@ -596,6 +589,12 @@ binned <- data %>%
 
 
 ```{r}
+summary(lm(sd_error ~ group*time, data = binned))$coefficients %>%
+  kable(booktabs = TRUE, escape = FALSE, digits = digits,
+        caption = "Linear model where the response is the standard deviation of the mean error computed for each of 10 bins of the stimulus position by subject and timepoint.") %>%
+  kable_styling(latex_options = "HOLD_position", 
+                bootstrap_options = "striped", full_width = F) 
+
 anova(lm(sd_error ~ group*time, data = binned)) %>%
   kable(booktabs = TRUE, escape = FALSE, digits = digits,
         caption = "Linear model where the response is the standard deviation of the mean error computed for each of 10 bins of the stimulus position by subject and timepoint.") %>%
@@ -1114,11 +1113,13 @@ anova(glm(Pu ~ group * time , data = groupedSubjSes,
 
 ## Uniform component using slopes
 
-```{r fig.show='hold', fig.align='center', fig.cap = 'Coloured lines accounts for the linear model fitted for the uniform component (subject by subject). Black lines are the results of the linear model fitted on the intercept and slope of the subject-models (coloured lines).'}
+```{r fig.show='hold', fig.align='center', fig.cap = 'Coloured lines accounts for the linear model fitted for the uniform component (subject by subject). Black lines are the results of the linear model fitted on the intercept and slope of the subject-models (coloured lines).', warning = FALSE}
 uniform_mod <- groupedSubjSes %>%
+  ungroup() %>%
   group_by(subject) %>%
   nest() %>%
-  mutate(mod = map(data, function(df) lm(Pu ~ time, data = df)),
+  mutate(mod = map(data, function(df) glm(Pu ~ time , data = df,
+                                          family = binomial(link = "logit"), weights=n)),
          coefficients = map(mod, function(df) df$coefficients),
          intercept = map_dbl(coefficients, 1),
          slope = map_dbl(coefficients, 2), 
@@ -1179,55 +1180,153 @@ uniform_mod %>%
 
 # Serial bias
 
-```{r}
-Sigma <- seq(0.1, 1.9, by = 0.1)
+```{r message = FALSE}
+Sigma <- seq(0.1, 1.9, by = 0.05)
+
+# DoG: normalized first derivative of a Gaussian with fixed location hyperparameter mu=0
+dnorm_deriv1 <- function(x, mean = 0, sd = 1) {
+  return(-(x/(sd^2))*dnorm(x, mean = mean, sd = sd))
+} 
 
 
-crossValSigma <- function(sigma, data, derivative = 1){
-  #data$DoG <- ddnorm(data$diffstim, mean = 0, sd = sigma)
+dnorm_deriv3 <- function(x, mean = 0, sd = 1) {
+  return((((-3*x*sd^2)-x^3)/(sd^6))*dnorm(x, mean, sd = 1))
+} 
+
+find_nearest <- function(array, value){
+    array = as.matrix(array)
+    idx = which.min(abs(array-value))
+    return(idx)}
+    
+normgauss <- function(xxx,sigma){
+	gauss = (1/(sigma*sqrt(2*pi))*exp(-(xxx-0)^2 / (2*sigma^2)))
+	return(gauss/max(gauss))
+}
+
+normgrad <- function(xxx){
+  require("numDeriv")
+	return(c(diff(xxx))/max(c(diff(xxx))))
+}
+
+dog1 <- function(sigma, x){
+  xxx 	= seq(-pi/2, pi/2, by= .0001) 
+	dog_1st = normgrad(normgauss(xxx,sigma))
+	return(unlist(lapply(x, function(x)
+	  if(is.na(x)){return(NA)}else{dog_1st[find_nearest(xxx,x)]})))
+}
+
+dog3 <- function(sigma,x){
+  xxx 	= seq(-pi/2, pi/2, by= .0001) 
+	dog_3rd = normgrad(normgrad(normgrad(normgauss(xxx,sigma))))
+	return(unlist(lapply(x, function(x)
+	  if(is.na(x)){return(NA)}else{dog_3rd[find_nearest(xxx,x)]})))
+	}
+
+
+crossValSigma <- function(sigma, data, derivative){
   if(derivative == 1){
-    data$DoG <- dnorm_deriv1(data$diffstim)}
+    data$DoG <- dnorm_deriv1(data$diffstim, sd = sigma)}
+    #data$DoG <- dog1(sigma = sigma, x = data$diffstim)}
   else{if(derivative == 3){
-    data$DoG <- dnorm_deriv3(data$diffstim)}}
-  smp_size <- floor(0.67 * nrow(data))
-  train_id <- sample(seq_len(nrow(data)), size = smp_size)
-  train <- data[train_id, ]
-  test <- data[-train_id, ]
+    data$DoG <- dnorm_deriv1(data$diffstim, sd = sigma)}}
+    #data$DoG <- dog3(sigma = sigma, x = data$diffstim)}}
+  train <- data %>%
+    group_by(subject, time) %>%
+    sample_frac(.67)
+  test <- anti_join(data, train, by = c('subject', 'time', 'trial')) # test dataframe with observations not in 'train.'
   mod <- lm(fourier_error ~ group*time*DoG, data = train)
   pred <- predict(mod, test)
-  MSE <- mean((na.omit(pred - test$error))^2)
+  MSE <- mean((na.omit(pred - test$fourier_error))^2)
   return(MSE)
 }
 ```
 
 
 ```{r eval = FALSE}
-# DoG: normalized first derivative of a Gaussian with fixed location hyperparameter mu=0
+#Cross-validation to find hyperparameter sigma
+groupedData %>%
+  mutate(sim = map(data, function(x) lapply(Sigma, function(y)
+    replicate(1000, crossValSigma(y, x, derivative = 1))))) 
+save(groupedData, file = '/Users/albamorato/Documents/IDIBAPS/ANMDA/MRI/behaviour/groupedData.RData')
+
+groupedData %>%
+  mutate(sim3 = map(data, function(x) lapply(Sigma, function(y)
+    replicate(1000, crossValSigma(y, x, derivative = 3))))) 
+save(groupedData, file = '/Users/albamorato/Documents/IDIBAPS/ANMDA/MRI/behaviour/groupedData.RData')
+
+groupedData <- groupedData %>%
+  mutate(mean_MSE = map(.x = sim, .f = function(x) unlist(lapply(x, mean))),
+         mean_MSE3 = map(.x = sim3, .f = function(x) unlist(lapply(x, mean))),
+         min_MSE = unlist(map(.x = mean_MSE, .f = min)),
+         min_MSE3 = unlist(map(.x = mean_MSE3, .f = min)),
+         sigma = unlist(map(.x = mean_MSE, .f = function(x) Sigma[x == min_MSE])),
+         sigma3 = unlist(map(.x = mean_MSE3, .f = function(x) Sigma[x == min_MSE3])),
+         data = map2(.x = data, .y = sigma, 
+                     .f = function(x, y) mutate(x, DoG = dnorm_deriv1(x$diffstim, 
+                                                                      mean = 0, sd = y))),
+         data = map2(.x = data, .y = sigma3, 
+                     .f = function(x, y) mutate(x, DoG3 = dnorm_deriv3(x$diffstim, 
+                                                                      mean = 0, sd = y))),
+         mod = pmap(.l = list(d = data, min = min_MSE, min3 = min_MSE3), 
+                    .f = function(d, min, min3) if(min < min3){
+                      lm(fourier_error ~ time*DoG, 
+                          data = d, na.action = na.omit)}else{
+                            lm(fourier_error ~ time*DoG3, 
+                                data = d, na.action = na.omit)}),
+         data = map2(.x = mod, .y = data, 
+                     function(x, y) mutate(y, pred = predict(x, newdata = y, 
+                                                                 level = 0))))
+```
+
+```{r eval = FALSE}
 #Cross-validation to find hyperparameter sigma
 sim <- lapply(Sigma, function(x) replicate(10000, crossValSigma(x, data, derivative = 1)))
-sim3 <- lapply(Sigma, function(x) replicate(10000, crossValSigma(x, data, derivative = 3)))
-
 save(sim, file = '/Users/albamorato/Documents/IDIBAPS/ANMDA/MRI/behaviour/sim.RData')
-save(sim3, file = '/Users/albamorato/Documents/IDIBAPS/ANMDA/MRI/behaviour/sim3.RData')
 
+sim3 <- lapply(Sigma, function(x) replicate(10000, crossValSigma(x, data, derivative = 3)))
+save(sim3, file = '/Users/albamorato/Documents/IDIBAPS/ANMDA/MRI/behaviour/sim3.RData')
 ```
 
 ```{r}
 load(file = '/Users/albamorato/Documents/IDIBAPS/ANMDA/MRI/behaviour/sim.RData')
 load(file = '/Users/albamorato/Documents/IDIBAPS/ANMDA/MRI/behaviour/sim3.RData')
 
-mean_SEM <- unlist(lapply(sim, mean))
-min_SEM <- min(mean_SEM)
-sigma <- Sigma[mean_SEM == min_SEM]
+#load(file = '/Users/albamorato/Documents/IDIBAPS/ANMDA/MRI/behaviour/simm.RData')
+#load(file = '/Users/albamorato/Documents/IDIBAPS/ANMDA/MRI/behaviour/simm3.RData')
 
-mean_SEM3 <- unlist(lapply(sim3, mean))
-min_SEM3 <- min(mean_SEM3)
-sigma3 <- Sigma[mean_SEM3 == min_SEM3]
+mean_MSE <- unlist(lapply(sim, mean))
+min_MSE <- min(mean_MSE)
+sigma <- Sigma[mean_MSE == min_MSE]
 
-data$DoG <- dnorm_deriv1(data$diffstim, mean = 0, sd = sigma)
-data$DoG3 <- dnorm_deriv3(data$diffstim, mean = 0, sd = sigma3)
+mean_MSE3 <- unlist(lapply(sim3, mean))
+min_MSE3 <- min(mean_MSE3)
+sigma3 <- Sigma[mean_MSE3 == min_MSE3]
 
-if(min_SEM < min_SEM3){
+#data$DoG <- dnorm_deriv1(data$diffstim, mean = 0, sd = sigma)
+#data$DoG3 <- dnorm_deriv3(data$diffstim, mean = 0, sd = sigma3)
+
+data$DoG <- dog1(sigma = sigma, x = data$diffstim)
+data$DoG3 <- dog3(sigma = sigma, x = data$diffstim)
+
+diffstims <- seq(-pi/2, pi/2, length.out = 30)
+#DoG <- dnorm_deriv1(diffstims, mean = 0, sd = sigma)
+#DoG3 <- dnorm_deriv3(diffstims, mean = 0, sd = sigma3)
+DoG <- dog1(sigma = sigma, x = diffstims)
+DoG3 <- dog3(sigma = sigma, x = diffstims)
+
+par(mfrow = c(1, 2))
+plot(Sigma, mean_MSE, type = 'l', 
+     ylim = c(min(c(mean_MSE, mean_MSE3)), max((c(mean_MSE, mean_MSE3)))))
+lines(Sigma, mean_MSE3, col = 'orange')
+
+plot(diffstims, DoG, type = 'l', 
+     ylim = c(min(na.omit(c(DoG, DoG3))), max(na.omit((c(DoG, DoG3))))))
+lines(diffstims, DoG3, col = 'orange')
+```
+
+
+```{r}
+if(min_MSE < min_MSE3){
   mod <- lme(fourier_error ~ group*time*DoG,  random = ~(1+group+time)|subject, 
              data = data, na.action = na.omit)
 }else{mod <- lme(fourier_error ~ group*time*DoG3, random = ~(1+group)|subject, 
@@ -1378,4 +1477,41 @@ data %>%
   scale_color_manual(values=colors) +
   scale_fill_manual(values=colors) + 
   labs(x = "Difference previous - current stimulus", y = 'Error') 
+```
+
+
+```{r}
+groupedSubjSes <- groupedSubjSes %>%
+  mutate(foldedserialbias = map(.x = data, .f = function(x) 
+    folded_serial_bias(prevcurr = x$diffstim, error = x$fourier_error, window = window,
+                       step = step)),
+    mean_folded = unlist(map(.x = foldedserialbias, function(x) mean(x$m))))
+
+groupedSubjSes %>%
+  group_by(group, session) %>%
+  nest() %>%
+  mutate(m = unlist(map(data, function(x) mean(na.omit(x$mean_folded)))), 
+         s = unlist(map(data, function(x) sd(na.omit(x$mean_folded)))),
+         n = unlist(map(data, function(x) nrow(x))),
+         se = s/n,
+         lower = m - se,
+         upper = m + se,
+         width = unlist(map(data, function(x) nrow(x)*0.01)),
+         time = recode(session, S1 = 0, S2 = 3/12, S3 = 6/12, S4 = 12/12, S5 = 24/12)) %>%
+  group_by(time) %>%
+  mutate(
+    width = 0.05 * n()
+  ) %>%
+  ggplot(aes(x = time, y = m, color = group)) +
+  geom_point(position = position_dodge(width = 0.15)) + 
+  geom_errorbar(aes(ymin = lower, ymax = upper, color = group, width = width), 
+                position = position_dodge(width = 0.15)) +
+  geom_point(data = groupedSubjSes, aes(x = time, y = mean_folded, 
+                                        colour = group),  
+             position = position_jitterdodge(dodge.width = 0.15,
+                                             jitter.width = 0.05), 
+             alpha = 0.3) +
+  geom_hline(yintercept=0) +
+  scale_color_manual(values=colors) +
+  ylab('Mean folded serial bias')
 ```
