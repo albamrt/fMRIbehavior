@@ -332,7 +332,7 @@ data$group <- as.factor(data$group)
 data$subject <- as.factor(data$subject)
 
 # Relevel factors:
-data$group <- relevel(data$group, ref = 'C')
+data$group <- relevel(data$group, ref = 'E')
 
 # Keep only memory trials:
 data = data[data$type == 1, ]
@@ -431,7 +431,7 @@ data = data %>%
 
 The excluded subjects are:
 
-```{r}
+```{r }
 kable(outliers, digits = digits, booktabs = TRUE, escape = FALSE,
       caption = 'Outlier subjects removed from original data.',
       col.names = c(label(data$subject), label(data$session), 
@@ -610,7 +610,7 @@ fit <- data %>%
   nest() %>%
   mutate(Fourier = map(.x = data,
                        .f = ~as.numeric(Fourier(.x$error ~ .x$S_rad, 
-                                               minq = 1, maxq = 10, crit = "aic"))))
+                                               minq = 1, maxq = 30, crit = "aic"))))
  
 data$Fourier <- unlist(fit$Fourier)
 data$fourier_error <- wrap((data$error - data$Fourier), pi/2)
@@ -642,6 +642,7 @@ data %>%
   labs(x = 'Stimulus postion (rad)', y = "Error",
        group = label(data$group))
 ```
+
 ```{r}
 binned2 <- data %>%
   mutate(bin = ntile(x = S_rad, n = 10)) %>%
@@ -784,7 +785,8 @@ groupedSubjSes <- data %>%
          n = unlist(map(.x = data, .f = ~nrow(.x))),
          group = substr(subject, 1,1), 
          time = unlist(map(data, function(x) unique(x['time'])))) 
-
+# relevel
+groupedSubjSes$group <- factor(groupedSubjSes$group, levels = c('E', 'C', 'S'))
 groupedData <- data %>%
   group_by(group, session) %>%
   nest() %>%
@@ -861,14 +863,14 @@ groupedSubjSes %>%
 ```
 
 
-```{r}
-summary(lme(abs(bias) ~ group * time, random = ~(1+group)|subject, data = groupedSubjSes))$tTable %>%
+```{r }
+summary(lme(abs(bias) ~ group * time, random = ~(1)|subject, data = groupedSubjSes))$tTable %>%
   kable(digits = digits, booktabs = TRUE, escape = FALSE,
         caption = 'Linear mixed-effects model where the response is the absolute bias and regressors are group, time and its interaction.') %>%
     kable_styling(latex_options = "HOLD_position", 
                 bootstrap_options = "striped", full_width = F)
 
-anova(lme(abs(bias) ~ group * time, random = ~(1+group)|subject, data = groupedSubjSes)) %>%
+anova(lme(abs(bias) ~ group * time, random = ~(1)|subject, data = groupedSubjSes)) %>%
   kable(digits = digits, booktabs = TRUE, escape = FALSE,
         caption = "Anova for the linear mixed-effects model where the response is the absolute bias and regressors are group, time and its interaction.") %>%
     kable_styling(latex_options = "HOLD_position", 
@@ -1124,14 +1126,16 @@ uniform_mod <- groupedSubjSes %>%
          intercept = map_dbl(coefficients, 1),
          slope = map_dbl(coefficients, 2), 
          group = substr(subject, 1, 1),
-         prediction = map(mod, function(x) predict(x)),
+         prediction = map(mod, function(x) predict(x, type = 'response')),
          time = map(data, function(x) x$time))
 
 pred <- expand.grid(group = c('C', 'E', 'S'), time = unique(groupedSubjSes$time))
-pred$intercept <- predict(lm(intercept ~ group, data = uniform_mod), newdata = pred)
-pred$slope <- predict(lm(slope ~ group, data = uniform_mod), newdata = pred)
+pred$intercept <- predict(lm(intercept ~ group, data = uniform_mod), 
+                          newdata = pred)
+pred$slope <- predict(lm(slope ~ group, data = uniform_mod), 
+                      newdata = pred)
 pred <- pred %>%
-  mutate(prediction = intercept + slope*time)
+  mutate(prediction = exp(intercept +slope*time))
 
 uniform_mod %>%
   unnest(c(prediction, time)) %>%
@@ -1181,6 +1185,9 @@ uniform_mod %>%
 # Serial bias
 
 ```{r message = FALSE}
+data2 = data
+# removing outlier trials 
+#data = data[abs(data$error) < 0.5,]
 Sigma <- seq(0.1, 1.9, by = 0.05)
 
 # DoG: normalized first derivative of a Gaussian with fixed location hyperparameter mu=0
@@ -1243,11 +1250,26 @@ crossValSigma <- function(sigma, data, derivative){
 
 
 ```{r eval = FALSE}
+groupedData2 <- groupedData
+groupedData <- data %>%
+  group_by(group, session) %>%
+  nest() %>%
+  mutate(JV10e = map(.x = data, .f = ~JV10_error(X = .x$fourier_R, Tg = .x$S_rad))) %>%
+  mutate(JV10 = map(.x = data, .f = ~JV10_fit(X = .x$fourier_R, Tg = .x$S_rad, return.ll = TRUE))) %>%
+  mutate(precision = map_dbl(JV10e, 1), 
+         bias = map_dbl(JV10e, 2),
+         L = unlist(map(.x = JV10, .f = ~.x$LL)),
+         K = unlist(map(.x = JV10, .f = ~.x$B['K'])),
+         Pt = unlist(map(.x = JV10, .f = ~.x$B['Pt'])),
+         Pu = unlist(map(.x = JV10, .f = ~.x$B['Pu'])),
+         sd = k2sd(K),
+         precision_mixture = 1/sd,
+         time = unlist(map(data, function(x) unique(x['time'])))) 
 #Cross-validation to find hyperparameter sigma
 groupedData %>%
   mutate(sim = map(data, function(x) lapply(Sigma, function(y)
     replicate(1000, crossValSigma(y, x, derivative = 1))))) 
-save(groupedData, file = '/Users/albamorato/Documents/IDIBAPS/ANMDA/MRI/behaviour/groupedData.RData')
+#save(groupedData, file = '/Users/albamorato/Documents/IDIBAPS/ANMDA/MRI/behaviour/groupedData.RData')
 
 groupedData %>%
   mutate(sim3 = map(data, function(x) lapply(Sigma, function(y)
@@ -1480,6 +1502,25 @@ data %>%
 ```
 
 
+```{r fig.height = 5, fig.width = 8, fig.cap = 'Folded serial bias by group and session. Here the fit (solid line) is computed as the mean of individual fits.', warning = FALSE}
+mod_fit2 <- mod_fit %>%
+  group_by(x, group) %>%
+  mutate(y = mean(pred))
+  
+data %>%
+  ggplot(aes(x = abs(diffstim), y = fourier_error*sign(diffstim)), fill = group) +
+  stat_smooth(aes(fill = group, color = group), method = "loess",
+              span = window, linetype = 'dashed', alpha = 0.2) +
+  geom_hline(yintercept = 0, color = "black") +
+  geom_line(data = mod_fit2[mod_fit2$x>0,], aes(x = x, y = pred, color = group), 
+            size = 1) +
+  facet_wrap(~ group + session, ncol = 4) +
+  scale_color_manual(values=colors) +
+  scale_fill_manual(values=colors) + 
+  labs(x = "Difference previous - current stimulus", y = 'Error') 
+```
+
+
 ```{r}
 groupedSubjSes <- groupedSubjSes %>%
   mutate(foldedserialbias = map(.x = data, .f = function(x) 
@@ -1515,3 +1556,5 @@ groupedSubjSes %>%
   scale_color_manual(values=colors) +
   ylab('Mean folded serial bias')
 ```
+
+
