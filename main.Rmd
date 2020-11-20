@@ -39,7 +39,7 @@ options(knitr.kable.NA = '')
 ```{r child = 'childDocuments/descriptive.Rmd'}
 ```
 
-### Absolute error
+## Absolute error
 ```{r child = 'childDocuments/absoluteError.Rmd'}
 ```
 
