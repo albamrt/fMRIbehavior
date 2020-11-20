@@ -1,6 +1,5 @@
-# fMRIbehavior
-
-Behavior report in: https://albamrt.github.io/NMDA_fMRI_behavior/
+# behavior from the fMRI task
+Report in: https://albamrt.github.io/NMDA_fMRI_behavior/
 
 # Instructions of usage:
 1. Download this repository.
