@@ -1,4 +1,4 @@
-# behavior from the fMRI task
+# Report
 Report in: https://albamrt.github.io/NMDA_fMRI_behavior/
 
 # Instructions of usage:
