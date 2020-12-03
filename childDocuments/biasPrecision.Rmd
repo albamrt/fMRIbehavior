@@ -95,7 +95,7 @@ groupedSubjSes %>%
 #### Modelling bias
 
 ```{r}
-summary(lme(precision ~ group * time, random = ~(1+group)|subject, data = groupedSubjSes))$varFix %>%
+summary(lme(precision ~ group * time, random = ~(1+group)|subject, data = groupedSubjSes))$tTable %>%
   kable(digits = digits, booktabs = TRUE, escape = FALSE,
         caption = 'Linear mixed-effects model where the response is precision and regressors are group, time and its interaction.') %>%
     kable_styling(latex_options = "HOLD_position", 
@@ -128,7 +128,7 @@ groupedSubjSes %>%
 #### Modelling precision
 ```{r }
 tryCatch(
-  summary(lme(abs(bias) ~ group * time, random = ~(1+group)|subject, data = groupedSubjSes))$varFix %>%
+  summary(lme(abs(bias) ~ group * time, random = ~(1+group)|subject, data = groupedSubjSes))$tTable %>%
   kable(digits = digits, booktabs = TRUE, escape = FALSE,
         caption = 'Linear mixed-effects model where the response is bias and regressors are group, time and its interaction.') %>%
     kable_styling(latex_options = "HOLD_position", 
