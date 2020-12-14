@@ -1,0 +1,93 @@
+---
+title: ''
+output: html_document
+---
+
+```{r include = FALSE}
+opts_knit$set(root.dir=normalizePath('../'))
+knitr::opts_chunk$set(echo = FALSE, fig.align='center', fig.pos = 'H', message = FALSE, warning = FALSE)
+options(knitr.kable.NA = '')
+```
+
+```{r}
+load("data/preproc_data.RData")
+source('helpers/helpers.R')
+source('helpers/settings.R')
+```
+
+### Mean absolute error by group and session:
+```{r, fig.align='center', fig.height = 3, fig.width = 8, fig.cap = 'Mean error by subject and group through time'}
+data %>%
+  ggplot(aes(x = time, y = abs(error), color = group)) +
+  stat_summary(fun.y = mean, geom = 'line', show.legend = FALSE,
+                position = position_dodge(width = 0.05), 
+                aes(group = subject), alpha = 0.3) +
+  facet_wrap(~ group) +
+  stat_summary(fun.data = "mean_cl_boot", show.legend = FALSE,
+                position = position_dodge(width = 0.05), 
+                aes(group = group)) +
+   stat_summary(fun.y = mean, geom = "line", size = 1, show.legend = FALSE,
+                position = position_dodge(width = 0.05), 
+                aes(group = group)) +
+  scale_color_manual(values = colors) +
+  theme_minimal(base_size = 15) +
+  labs(x = label(data$time), y = "Absolute error", color = label(data$group)) +
+  facet_wrap(~ group)
+```
+
+
+```{r, fig.height = 3, fig.align='center', fig.cap = 'Mean absolute error by group and session.', out.width = '50%'}
+data %>%
+  ggplot(aes(x = time, y = abs(error), color = group, group = group)) +
+  #geom_jitter(width = 0.2, alpha = 0.2, show.legend = FALSE) +
+  stat_summary(fun.data = "mean_cl_boot",
+               position = position_dodge(width=0.05)) +
+  stat_summary(fun.y = mean, geom = "line",  size = 1, show.legend = FALSE,
+               position = position_dodge(width=0.05)) +
+  scale_color_manual(values=colors) +
+  labs(x = label(data$time), y = "Absolute error",
+       color = label(data$group), group = label(data$group))
+```
+
+#### Modelling mean absolute error by group and session:
+```{r}
+summary(glmer(abs(error) ~ group*time + (1 + time | subject), 
+      family = Gamma(link="log"), data = data))$coefficients %>%
+  kable(booktabs = TRUE, escape = FALSE, digits = digits,
+        caption = "Generalized linear mixed-effects model where the response is the absolute error and regressors are group and time, with random effects for the intercept and session.") %>%
+  kable_styling(latex_options = "HOLD_position", 
+                bootstrap_options = "striped", full_width = F) 
+
+# require(CircGLMBayes)
+# m <- circGLM(error ~ group*session, data = data)
+```
+
+### Mean absolute error by subject:
+
+```{r, fig.align='center', fig.height = 10, fig.width = 8, fig.cap = 'Mean error by subject trough time', eval = FALSE, include = FALSE}
+
+for(i in seq_along(unique(data$group))){
+  data %>%
+    filter(group == unique(data$group)[i]) %>%
+    ggplot(aes(x = time, y = abs(error), color = group)) +
+    geom_jitter(width = 0.05, alpha = 0.2, show.legend = FALSE) +
+    stat_summary(fun = mean, geom = 'point', size = 1, show.legend = FALSE) +
+    stat_summary(fun = mean, geom = 'line', size = 1, show.legend = FALSE) +
+    scale_color_manual(values=colors) +
+    labs(x = label(data$time), y = "Absolute error", color = label(data$group)) +
+    facet_wrap_paginate(~subject, ncol = 4, page = i) -> p
+  print(p)
+}
+```
+
+
+```{r, fig.align='center', fig.height = 40, fig.width = 8, fig.cap = 'Mean error by subject through time'}
+data %>%
+  ggplot(aes(x = time, y = abs(error), color = group)) +
+  geom_jitter(width = 0.05, alpha = 0.2, show.legend = FALSE) +
+  stat_summary(fun.y = mean, geom = 'point', size = 1, show.legend = FALSE) +
+  stat_summary(fun.y = mean, geom = 'line', size = 1, show.legend = FALSE) +
+  scale_color_manual(values=colors) +
+  labs(x = label(data$time), y = "Absolute error", color = label(data$group)) +
+  facet_wrap(~ subject, ncol = 4)
+```

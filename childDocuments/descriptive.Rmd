@@ -1,0 +1,58 @@
+---
+title: ''
+output: html_document
+---
+
+```{r include = FALSE}
+opts_knit$set(root.dir=normalizePath('../'))
+knitr::opts_chunk$set(echo = FALSE, fig.align='center', fig.pos = 'H', message = FALSE, warning = FALSE)
+options(knitr.kable.NA = '')
+```
+
+```{r}
+load("data/preproc_data.RData")
+source('helpers/helpers.R')
+source('helpers/settings.R')
+```
+
+### Response angle:
+```{r, fig.width = 12, fig.height = 3, fig.cap = 'Response distribution by group for each session.'}
+data %>%
+  ggplot(aes(x = R_rad, fill = group)) + 
+  geom_histogram(aes(y = ..density..), bins = bins,
+                 position = 'identity', alpha = 0.4) +
+  stat_density(geom = "line", alpha = 1, aes(fill = NA, color = group), 
+               position = "identity", show.legend = FALSE) +
+  scale_fill_manual(values = as.vector(colors)) +
+  scale_color_manual(values = colors) +
+  labs(x = label(data$R_rad), fill = label(data$group), color = label(data$group)) +
+  facet_wrap(vars(session), ncol = 4)
+```
+ 
+### Error:
+```{r, fig.width = 12, fig.height = 3, fig.cap = 'Error distribution by group for each session.'}
+data %>%
+  ggplot(aes(x = error, fill = group)) + 
+  geom_histogram(aes(y = ..density..), bins = bins,
+                 position = 'identity', alpha = 0.4) +
+  stat_density(geom = "line", alpha = 1, aes(fill = NA, color = group), 
+               position = "identity", show.legend = FALSE) +
+  scale_fill_manual(values = as.vector(colors)) +
+  scale_color_manual(values = colors) +
+  labs(x = label(data$error), fill = label(data$group), color = label(data$group)) +
+  facet_wrap(vars(session), ncol = 4)
+```
+
+### Response time:
+```{r, fig.width = 12, fig.height = 3, fig.cap = 'Response time distribution by group for each session.'}
+data %>%
+  ggplot(aes(x = RT, fill = group)) + 
+  geom_histogram(aes(y = ..density..), bins = bins,
+                 position = 'identity', alpha = 0.4) +
+  stat_density(geom = "line", alpha = 1, aes(fill = NA, color = group), 
+               position = "identity", show.legend = FALSE) +
+  scale_fill_manual(values = as.vector(colors)) +
+  scale_color_manual(values = colors) +
+  labs(x = label(data$error), fill = label(data$group), color = label(data$group)) +
+  facet_wrap(vars(session), ncol = 4)
+```
