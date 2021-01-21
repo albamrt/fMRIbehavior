@@ -1,0 +1,71 @@
+---
+title: "NMDA fMRI behavior"
+knit: (function(input_file, encoding) {
+  out_dir <- 'docs';
+  rmarkdown::render(input_file,
+  encoding = encoding,
+  output_file = file.path(dirname(input_file), out_dir, 'index.html'))})
+date: "`r format(Sys.time(), '%d/%m/%y')`"
+output: html_document
+---
+
+<style type="text/css">
+
+h1.title {
+  font-size: 38px;
+  color: Black;
+  text-align: center;
+}
+h4.date {
+  font-size: 18px;
+  color: Black;
+  text-align: center;
+}
+</style>
+
+```{r setup, include = FALSE}
+require(knitr)
+knitr::opts_chunk$set(echo = FALSE, fig.align='center', fig.pos = 'H', message = FALSE, warning = FALSE)
+options(knitr.kable.NA = '')
+```
+
+# Contents {.tabset}
+
+## Data
+```{r child = 'childDocuments/preprocessing.Rmd'}
+```
+
+## Descriptive
+```{r child = 'childDocuments/descriptive.Rmd'}
+```
+
+## Absolute error
+```{r child = 'childDocuments/absoluteError.Rmd'}
+```
+
+## Bias and precision
+```{r child = 'childDocuments/biasPrecision.Rmd'}
+```
+
+## Serial bias
+```{r child = 'childDocuments/serialBias.Rmd'}
+```
+
+
+## Repulsion from axes
+```{r child = 'childDocuments/axesRepulsion.Rmd'}
+```
+
+## Cross-validating models
+```{r child = 'childDocuments/crossValidation.Rmd'}
+```
+
+
+## Bias and precision after removing repulsion
+```{r child = 'childDocuments/biasPrecisionFourier.Rmd'}
+```
+
+## Serial bias
+```{r child = 'childDocuments/serialBiasFourier.Rmd'}
+```
+
