@@ -1,0 +1,118 @@
+---
+title: ''
+output: html_document
+---
+
+```{r include = FALSE}
+require(knitr)
+opts_knit$set(root.dir=normalizePath('../'))
+knitr::opts_chunk$set(echo = FALSE, fig.align='center', fig.pos = 'H', message = FALSE, warning = FALSE)
+options(knitr.kable.NA = '')
+```
+
+```{r}
+load("data/preproc_data.RData")
+source('helpers/helpers.R')
+source('helpers/settings.R')
+```
+
+### Repulsion from axes
+```{r, fig.align='center', fig.cap = 'Repulsion from axes by group and session.', fig.height = 3}
+data %>%
+  ggplot(aes(x = S_rad, y = error, color = group, group = group, fill = group)) +
+  geom_smooth(alpha = 0.2) +
+  scale_color_manual(values=colors) +
+  scale_fill_manual(values=colors) +
+  facet_grid(~session) +
+  labs(x = 'Stimulus postion (rad)', y = "Error",
+       group = label(data$group))
+
+binned <- data %>%
+  mutate(bin = ntile(x = S_rad, n = 10)) %>%
+  group_by(bin, subject, group, time) %>%
+  summarise(mean_error = mean(error)) %>%
+  group_by(subject, group, time) %>%
+  summarise(sd_error = sd(mean_error)) %>%
+  as.data.frame()
+```
+
+### Modelling repulsion from axes
+```{r}
+summary(lm(sd_error ~ group*time, data = binned))$coefficients %>%
+  kable(booktabs = TRUE, escape = FALSE, digits = digits,
+        caption = "Linear model where the response is the standard deviation of the mean error computed for each of 10 bins of the stimulus position by subject and timepoint.") %>%
+  kable_styling(latex_options = "HOLD_position", 
+                bootstrap_options = "striped", full_width = F) 
+
+anova(lm(sd_error ~ group*time, data = binned)) %>%
+  kable(booktabs = TRUE, escape = FALSE, digits = digits,
+        caption = "Anova of the linear model where the response is the standard deviation of the mean error computed for each of 10 bins of the stimulus position by subject and timepoint.") %>%
+  kable_styling(latex_options = "HOLD_position", 
+                bootstrap_options = "striped", full_width = F) 
+```
+
+We can see there are significant differences that could affect our serial bias analyses. Therefore, we should remove this tendence.
+
+```{r fig.height = 40, fig.width = 8, message = FALSE, results = FALSE}
+data <- data %>%
+  arrange(subject, session, S_rad) 
+fit <- data %>%
+  group_by(subject, time) %>%
+  nest() %>%
+  mutate(Fourier = map(.x = data,
+                       .f = ~as.numeric(Fourier(.x$error ~ .x$S_rad, 
+                                               minq = 1, maxq = 30, crit = "aic"))))
+ 
+data$Fourier <- unlist(fit$Fourier)
+data$fourier_error <- wrap((data$error - data$Fourier), pi/2)
+data$fourier_R <- data$R_rad + data$fourier_error
+```
+
+
+### Repulsion from axes after removing tendence
+
+```{r message = FALSE, warning = FALSE, fig.cap = 'Repulsion from axes after removing Fourier fit.'}
+data %>%
+  ggplot(aes(x = S_rad, y = fourier_error, color = group, group = group, fill = group)) +
+  geom_smooth(alpha = 0.2) +
+  scale_color_manual(values=colors) +
+  scale_fill_manual(values=colors) +
+  facet_grid(~session) +
+  labs(x = 'Stimulus postion (rad)', y = "Error",
+       group = label(data$group))
+```
+
+```{r fig.height = 40, fig.width = 8, results = FALSE, fig.cap = 'Fourier expansion fit (dashed line) for the respulsion from axes for every subject (coloured smoothed line) and error of the model (dotted line).', include = FALSE}
+data %>%
+  ggplot(aes(x = S_rad, y = error, color = group, fill = group)) +
+  stat_smooth(alpha = 0.2, method = 'loess', formula = y~x, se = FALSE, n = 100) +
+  geom_line(aes(S_rad, Fourier), col="black", linetype = "dashed") +
+  geom_smooth(aes(S_rad, fourier_error), se = FALSE, col = 'black', 
+              alpha = 0.4, linetype = "dotted", method = 'loess', formula = y~x) +
+  scale_color_manual(values=colors) +
+  scale_fill_manual(values=colors) +
+  facet_wrap(~ subject:session, ncol = 4)
+  labs(x = 'Stimulus postion (rad)', y = "Error",
+       group = 'Group')
+```
+
+#### Modelling repulsion from axes after removing tendence
+```{r}
+binned2 <- data %>%
+  mutate(bin = ntile(x = S_rad, n = 10)) %>%
+  group_by(bin, subject, group, time) %>%
+  summarise(mean_error = mean(fourier_error)) %>%
+  group_by(subject, group, time) %>%
+  summarise(sd_error = sd(mean_error)) %>%
+  as.data.frame()
+
+anova(lm(sd_error ~ group*time, data = binned2)) %>%
+  kable(booktabs = TRUE, escape = FALSE, digits = digits,
+        caption = "Linear model where the response is the standard deviation of the mean error (after fitting the Fourier expansion) computed for each of 10 bins of the stimulus position by subject and timepoint.") %>%
+  kable_styling(latex_options = "HOLD_position",
+                bootstrap_options = "striped", full_width = F) 
+```
+
+```{r}
+save(data, groupedData, file = "data/preproc_data.RData")
+```

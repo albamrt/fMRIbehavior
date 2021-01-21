@@ -1,0 +1,229 @@
+---
+title: ''
+output: html_document
+---
+
+```{r include = FALSE}
+opts_knit$set(root.dir=normalizePath('../'))
+knitr::opts_chunk$set(echo = FALSE, fig.align='center', fig.pos = 'H', message = FALSE, warning = FALSE)
+options(knitr.kable.NA = '')
+```
+
+```{r}
+load("data/preproc_data.RData")
+source('helpers/helpers.R')
+source('helpers/settings.R')
+```
+
+### Serial bias by group and session
+```{r }
+window = pi/3
+step = pi/20
+
+gr <- split(data, 
+            list(data$group, data$session), drop = TRUE)
+serialbias <- lapply(gr, function(x) 
+  serial_bias(prevcurr = x$diffstim, error = x$error, window = window, step = step)) %>%
+  rbindlist(., idcol='id') %>%
+  as.data.frame() %>%
+  mutate(session = substr(id, 3, 4), group = substr(id, 1, 1)) %>%
+  filter(session != 'S5') %>%
+  filter(complete.cases(.))
+
+ggplot(serialbias, aes(x = x, y = m), color = group) +
+  geom_line() +
+  geom_hline(yintercept=0, color = "black") +
+  geom_ribbon(aes(x = x, ymin = yl, ymax = yh, fill = group), alpha = 0.4) +
+  facet_grid(vars(group), vars(session)) +
+  scale_color_manual(values=colors) +
+  scale_fill_manual(values=colors) +
+  labs(x = "Difference previous - current stimulus", y = 'Error') 
+```
+
+
+#### Serial bias - smoothing
+```{r}
+data %>%
+  filter(session != 'S5') %>%
+  ggplot(aes(x = diffstim, y = error), fill = group) +
+#  geom_point() +
+  stat_smooth(aes(fill = group), color = 'black', method = "loess", span = window) +
+  geom_hline(yintercept=0, color = "black") +
+  #geom_ribbon(aes(x = x, ymin = yl, ymax = yh, fill = group), alpha = 0.4) +
+  facet_grid(vars(group), vars(session)) +
+  scale_color_manual(values=colors) +
+  scale_fill_manual(values=colors) + 
+  labs(x = "Difference previous - current stimulus") 
+```
+
+#### Folded serial bias
+```{r }
+window = pi/5
+step = pi/20
+foldedserialbias <- lapply(gr, function(x) 
+  folded_serial_bias(prevcurr = x$diffstim, error = x$error, window = window, step = step)) %>%
+  rbindlist(., idcol='id') %>%
+  as.data.frame() %>%
+  mutate(session = substr(id, 3, 4), group = substr(id, 1, 1)) %>%
+  filter(session != 'S5') %>%
+  filter(complete.cases(.))
+
+ggplot(foldedserialbias, aes(x = x, y = m), color = group) +
+  geom_line() +
+  geom_hline(yintercept=0, color = "black") +
+  geom_ribbon(aes(x = x, ymin = yl, ymax = yh, fill = group), alpha = 0.4) +
+  #geom_line(data = mod_fit, aes(x = x, y = pred)) +
+  facet_grid(vars(group), vars(session)) +
+  scale_color_manual(values=colors) +
+  scale_fill_manual(values=colors) +
+  labs(x = "Difference previous - current stimulus", y = 'Error') 
+```
+
+#### Modelling serial bias by group and session
+```{r}
+# DoG: normalized first derivative of a Gaussian with fixed location hyperparameter mu=0
+#Cross-validation to find hyperparameter sigma
+dnorm_deriv1 <- function(x, mean = 0, sd = 1) {
+  return(-(x/(sd^2))*dnorm(x, mean = mean, sd = sd))
+} 
+dnorm_deriv3 <- function(x, mean = 0, sd = 1) {
+  return((((-3*x*sd^2)-x^3)/(sd^6))*dnorm(x, mean, sd = 1))
+} 
+
+crossValSigma <- function(sigma, data, derivative = 1){
+  #data$DoG <- ddnorm(data$diffstim, mean = 0, sd = sigma)
+  if(derivative == 1){
+    data$DoG <- dnorm_deriv1(data$diffstim)}
+  else{if(derivative == 3){
+    data$DoG <- dnorm_deriv3(data$diffstim)}}
+  smp_size <- floor(0.67 * nrow(data))
+  train_id <- sample(seq_len(nrow(data)), size = smp_size)
+  train <- data[train_id, ]
+  test <- data[-train_id, ]
+  mod <- lm(error ~ group*time*DoG, data = train)
+  pred <- predict(mod, test)
+  MSE <- mean((na.omit(pred - test$error))^2)
+  return(MSE)
+}
+
+require(miscTools)
+Sigma <- seq(0.1, 1.9, by = 0.1)
+sim <- lapply(Sigma, function(x) replicate(1000, crossValSigma(x, data, derivative = 1))) 
+mean_SEM <- unlist(lapply(sim, mean))
+min_SEM <- min(mean_SEM)
+sigma <- Sigma[mean_SEM == min_SEM]
+
+sim3 <- lapply(Sigma, function(x) replicate(1000, crossValSigma(x, data, derivative = 3))) 
+mean_SEM3 <- unlist(lapply(sim3, mean))
+min_SEM3 <- min(mean_SEM3)
+sigma3 <- Sigma[mean_SEM3 == min_SEM3]
+
+data$DoG <- dnorm_deriv1(data$diffstim, mean = 0, sd = sigma)
+data$DoG3 <- dnorm_deriv3(data$diffstim, mean = 0, sd = sigma3)
+
+if(min_SEM < min_SEM3){
+  mod <- lme(error ~ group*time*DoG,  random = ~(1+group)|subject, data = data, na.action = na.omit)
+}else{mod <- lme(error ~ group*time*DoG3, random = ~(1+group)|subject, data = data, na.action = na.omit)
+}
+anova(mod) %>%
+  kable(digits = digits, booktabs = TRUE, escape = FALSE,
+        caption = 'Summary of a linear model where the response is the error and regressors are group, time, a derivative of gaussian and its interaction.') %>%
+    kable_styling(latex_options = "HOLD_position", 
+                bootstrap_options = "striped", full_width = F)
+
+
+mod_fit <- expand.grid(x = seq(0, pi/2, 0.05), group = unique(data$group), 
+                       time = unique(data$time))
+mod_fit$session <- factor(mod_fit$time, levels = c(0, 0.25, 0.5, 1, 2), labels = c('S1', 'S2', 'S3', 'S4', 'S5'))
+if(min_SEM < min_SEM3){
+  mod_fit$DoG <- dnorm_deriv1(mod_fit$x, mean = 0, sd = sigma)
+}else{mod_fit$DoG3 <- dnorm_deriv3(mod_fit$x, mean = 0, sd = sigma3)
+}
+mod_fit$pred <- predict(mod, newdata = mod_fit, level = 0)
+
+```
+
+
+### Serial bias to previous response by group and session
+```{r }
+serialbiasprevresp <- lapply(gr, function(x) 
+  serial_bias(prevcurr = x$diffresp, error = x$error, window = window, step = step)) %>%
+  rbindlist(., idcol='id') %>%
+  as.data.frame() %>%
+  mutate(session = substr(id, 3, 4), group = substr(id, 1, 1)) %>%
+  filter(session != 'S5') %>%
+  filter(complete.cases(.))
+
+ggplot(serialbiasprevresp, aes(x = x, y = m), color = group) +
+  geom_line() +
+  geom_hline(yintercept=0, color = "black") +
+  geom_ribbon(aes(x = x, ymin = yl, ymax = yh, fill = group), alpha = 0.4) +
+  facet_grid(vars(group), vars(session)) +
+  scale_color_manual(values=colors) +
+  scale_fill_manual(values=colors) +
+  labs(x = "Difference previous response - current stimulus", y = 'Error') 
+```
+
+#### Serial bias to previous response - smoothing
+```{r}
+data %>%
+  filter(session != 'S5') %>%
+  ggplot(aes(x = diffresp, y = error), color = group) +
+#  geom_point() +
+  stat_smooth(aes(fill = group), color = 'black', method = "loess") +
+  geom_hline(yintercept=0, color = "black") +
+  #geom_ribbon(aes(x = x, ymin = yl, ymax = yh, fill = group), alpha = 0.4) +
+  facet_grid(vars(group), vars(session)) +
+  scale_color_manual(values=colors) +
+  scale_fill_manual(values=colors) +
+  labs(x = "Difference previous response - current stimulus")
+```
+
+
+#### Folded serial bias to previous response
+```{r}
+foldedserialbiasprevresp <- lapply(gr, function(x) 
+  folded_serial_bias(prevcurr = x$diffresp, error = x$error, window = window, step = step)) %>%
+  rbindlist(., idcol='id') %>%
+  as.data.frame() %>%
+  mutate(session = substr(id, 3, 4), group = substr(id, 1, 1)) %>%
+  filter(session != 'S5') %>%
+  filter(complete.cases(.))
+
+ggplot(foldedserialbias, aes(x = x, y = m), color = group) +
+  geom_line() +
+  geom_hline(yintercept=0, color = "black") +
+  geom_ribbon(aes(x = x, ymin = yl, ymax = yh, fill = group), alpha = 0.4) +
+  facet_grid(vars(group), vars(session)) +
+  scale_color_manual(values=colors) +
+  scale_fill_manual(values=colors) +
+  labs(x = "Difference previous - current stimulus", y = 'Error') 
+```
+
+
+```{r fig.height = 40, fig.width = 8, fig.cap = 'Folded serial bias by subject and session', include = FALSE}
+## NOT INCLUDED: Folded serial bias by subject 
+window = pi/4
+step = pi/10
+
+subj_sb <- split(data, 
+            list(data$subject, data$session), drop = TRUE)
+subj_foldedserialbias <- lapply(subj_sb, function(x) 
+  folded_serial_bias(prevcurr = x$diffstim, error = x$error, window = window, step = step)) %>%
+  rbindlist(., idcol='id') %>%
+  as.data.frame() %>%
+  mutate(session = substr(id, 3, 4), group = substr(id, 1, 1), subject = substr(id, 1, 3)) %>%
+  filter(session != 'S5') %>%
+  filter(complete.cases(.))
+
+ggplot(subj_foldedserialbias, aes(x = x, y = m), color = group) +
+  geom_line() +
+  geom_hline(yintercept=0, color = "black") +
+  geom_ribbon(aes(x = x, ymin = yl, ymax = yh, fill = group), alpha = 0.4) +
+  facet_wrap(~ subject + session, ncol = 4) +
+  scale_color_manual(values=colors) +
+  scale_fill_manual(values=colors) +
+  ggtitle('Folded serial bias') + 
+  labs(x = "Difference previous - current stimulus", y = 'Error') 
+``` 
+

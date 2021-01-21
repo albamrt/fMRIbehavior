@@ -1,0 +1,163 @@
+---
+title: ''
+output: html_document
+---
+
+```{r include = FALSE}
+require(knitr)
+opts_knit$set(root.dir=normalizePath('../'))
+knitr::opts_chunk$set(echo = FALSE, fig.align='center', fig.pos = 'H', message = FALSE, warning = FALSE)
+options(knitr.kable.NA = '')
+```
+
+```{r}
+source('helpers/helpers.R')
+source('helpers/settings.R')
+#data <- read.csv("data/behaviour.csv", sep=";")
+load(file = 'data/preproc_data.RData')
+```
+
+```{r helpers}
+JV10_fit <- function(X, Tg, NT = replicate(NROW(X), 0), uniform = TRUE, return.ll = TRUE) {
+  if(NCOL(X) > 2 | NCOL(Tg) > 1 | NROW(X) != NROW(Tg) | (any(NT != 0) & NROW(NT) != NROW(X) | NROW(NT) != NROW(Tg))) {
+    stop("Error: Input not correctly dimensioned", call. = FALSE)
+  }
+  n = NROW(X)
+  
+  nn = ifelse(any(NT != 0), NCOL(NT), 0)
+  
+  # Start parameters
+  K = c(1, 10, 100)
+  N = c(0.01, 0.1, 0.4)
+  U = c(0.01, 0.1, 0.4)
+  
+  if(nn == 0) {N = 0}
+  if(uniform == FALSE) {U = 0}
+  
+  loglik = -Inf
+  
+  # Parameter estimates
+  for(i in seq_along(K)) {
+    for(j in seq_along(N)) {
+      for(k in seq_along(U)) {
+        est_list = mixturer:::bays_2009_function(X = X, Tg = Tg, NT = NT, B_start = c(K[i], 1-N[j]-U[k], N[j], U[k]))
+        if (est_list$ll > loglik & !is.nan(est_list$ll) ) {
+          loglik = est_list$ll
+          B = est_list$b
+        }
+      }
+    }
+  }
+  
+  if(return.ll == TRUE) {
+    return(list(B = B, LL = loglik))
+  } else {
+    return(B)
+  }
+}
+```
+
+
+```{r eval = FALSE}
+require(rsample)
+crossval <- data %>%
+  group_by(session, subject, .drop=TRUE) %>%
+  nest() %>%
+  mutate(folds = map(.x = data, .f = ~mc_cv(data = .x, prop = 0.67,
+                                               times = 100))) %>%
+  unnest(folds) %>%
+  mutate(JV10train = map(.x = splits, 
+                         .f = ~JV10_fit(X = analysis(.x)$fourier_R, 
+                                                Tg = analysis(.x)$S_rad, 
+                                                return.ll = TRUE))) %>%
+  mutate(JV10train_0 = map(.x = splits, 
+                           .f = ~JV10_fit(X = analysis(.x)$fourier_R, 
+                                                  Tg = analysis(.x)$S_rad, 
+                                                  uniform = FALSE, return.ll = TRUE))) %>%
+  mutate(LLtest = unlist(map2(.x = splits, .y = JV10train,
+        .f = ~unique(mixturer:::bays_2009_likelihood(X = assessment(.x)$fourier_R, 
+                                                     Tg = assessment(.x)$S_rad, 
+                                                     B = as.matrix(.y$B))$LL)))) %>%
+  mutate(LLtest_0 = unlist(map2(.x = splits, .y = JV10train_0,
+        .f = ~unique(mixturer:::bays_2009_likelihood(X = assessment(.x)$fourier_R,
+                                                     Tg = assessment(.x)$S_rad, 
+                                                     B = as.matrix(.y$B))$LL)))) %>%
+  summarise(LL = mean(LLtest),
+            LL0 = mean(LLtest_0)) %>%
+  filter(!is.nan(LL))
+
+save(crossval, file = 'data/crossval.RData')
+```
+ 
+```{r fig.show='hold', out.width = '49%', fig.ncol = 2, fig.align='center', fig.cap = 'Cross validation of mixture model (Uniform & von Mises) vs a one-component (Von Mises) model.'}
+load(file = 'data/crossval.RData')
+
+ci_all <- crossval %>%
+  ungroup() %>%
+  summarise(m0.mean = mean(LL0),
+            m0.sd = sd(LL0),
+            m0.n = n(),
+            m0.se = m0.sd / sqrt(m0.n),
+            m0.lower_ci = m0.mean - qt(1 - (0.05 / 2), m0.n - 1) * m0.se,
+            m0.upper_ci = m0.mean + qt(1 - (0.05 / 2), m0.n - 1) * m0.se,
+            m1.mean = mean(LL),
+            m1.sd = sd(LL),
+            m1.n = n(),
+            m1.se = m1.sd / sqrt(m1.n),
+            m1.lower_ci = m1.mean - qt(1 - (0.05 / 2), m1.n - 1) * m1.se,
+            m1.upper_ci = m1.mean + qt(1 - (0.05 / 2), m1.n - 1) * m1.se)
+  
+ci_long <- reshape(as.data.frame(ci_all), 
+                   direction='long', 
+                   varying = list(mean = c('m0.mean', 'm1.mean'),
+                                         sd = c('m0.sd', 'm1.sd'),
+                                         n = c('m0.n', 'm1.n'),
+                                         se = c('m0.se', 'm1.se'),
+                                         lower_ci = c('m0.lower_ci', 'm1.lower_ci'),
+                                         upper_ci = c('m0.upper_ci', 'm1.upper_ci')),
+                   timevar = 'Model',
+                   times = c('VonMises', 'VonMises+Uniform'),
+                   v.names = c('mean', 'sd', 'n', 'se', 'lower_ci', 'upper_ci'))
+
+ggplot(data = ci_long, aes(x = Model)) + 
+  geom_errorbar(mapping = aes(ymin=lower_ci, ymax=upper_ci), width=.1) +
+  geom_point(aes(y = mean), size=3) +
+  ylab('Log-likelihood')
+
+crossval$group <- substr(crossval$subject, 1, 1)
+ci_groups <- crossval %>%
+  ungroup() %>%
+  group_by(group) %>%
+  summarise(m0.mean = mean(LL0),
+            m0.sd = sd(LL0),
+            m0.n = n(),
+            m0.se = m0.sd / sqrt(m0.n),
+            m0.lower_ci = m0.mean - qt(1 - (0.05 / 2), m0.n - 1) * m0.se,
+            m0.upper_ci = m0.mean + qt(1 - (0.05 / 2), m0.n - 1) * m0.se,
+            m1.mean = mean(LL),
+            m1.sd = sd(LL),
+            m1.n = n(),
+            m1.se = m1.sd / sqrt(m1.n),
+            m1.lower_ci = m1.mean - qt(1 - (0.05 / 2), m1.n - 1) * m1.se,
+            m1.upper_ci = m1.mean + qt(1 - (0.05 / 2), m1.n - 1) * m1.se)
+  
+ci_groups_long <- reshape(as.data.frame(ci_groups), 
+                          direction = 'long', 
+                          varying = list(mean = c('m0.mean', 'm1.mean'),
+                                         sd = c('m0.sd', 'm1.sd'),
+                                         n = c('m0.n', 'm1.n'),
+                                         se = c('m0.se', 'm1.se'),
+                                         lower_ci = c('m0.lower_ci', 'm1.lower_ci'),
+                                         upper_ci = c('m0.upper_ci', 'm1.upper_ci')),
+                          timevar = 'Model',
+                          times = c('VonMises', 'VonMises+Uniform'),
+                          v.names = c('mean', 'sd', 'n', 'se', 'lower_ci', 'upper_ci'),
+                          idvar = 'group')
+
+ggplot(data = ci_groups_long, aes(x = Model, color = group)) + 
+  geom_errorbar(mapping = aes(ymin = lower_ci, ymax=upper_ci), 
+                width=.1, position = position_dodge(0.2)) +
+  geom_point(aes(y = mean), size=3, position = position_dodge(0.2)) +
+  scale_color_manual(values=colors) +
+  ylab('Log-likelihood')
+```
