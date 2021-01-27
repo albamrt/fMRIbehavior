@@ -190,7 +190,7 @@ foldedserialbiasprevresp <- lapply(gr, function(x)
   filter(session != 'S5') %>%
   filter(complete.cases(.))
 
-ggplot(foldedserialbias, aes(x = x, y = m), color = group) +
+ggplot(foldedserialbiasprevresp, aes(x = x, y = m), color = group) +
   geom_line() +
   geom_hline(yintercept=0, color = "black") +
   geom_ribbon(aes(x = x, ymin = yl, ymax = yh, fill = group), alpha = 0.4) +
