@@ -23,7 +23,7 @@ step = pi/20
 gr <- split(data, 
             list(data$group, data$session), drop = TRUE)
 serialbias <- lapply(gr, function(x) 
-  serial_bias(prevcurr = x$diffstim, error = x$error, window = window, step = step)) %>%
+  serial_bias(prevcurr = x$diffstim, error = x$fourier_error, window = window, step = step)) %>%
   rbindlist(., idcol='id') %>%
   as.data.frame() %>%
   mutate(session = substr(id, 3, 4), group = substr(id, 1, 1)) %>%
@@ -45,7 +45,7 @@ ggplot(serialbias, aes(x = x, y = m), color = group) +
 #### Serial bias - smoothing
 data %>%
   filter(session != 'S5') %>%
-  ggplot(aes(x = diffstim, y = error), fill = group) +
+  ggplot(aes(x = diffstim, y = fourier_error), fill = group) +
 #  geom_point() +
   stat_smooth(aes(fill = group), color = 'black', method = "loess", span = window) +
   geom_hline(yintercept=0, color = "black") +
@@ -61,7 +61,7 @@ data %>%
 window = pi/5
 step = pi/20
 foldedserialbias <- lapply(gr, function(x) 
-  folded_serial_bias(prevcurr = x$diffstim, error = x$error, window = window, step = step)) %>%
+  folded_serial_bias(prevcurr = x$diffstim, error = x$fourier_error, window = window, step = step)) %>%
   rbindlist(., idcol='id') %>%
   as.data.frame() %>%
   mutate(session = substr(id, 3, 4), group = substr(id, 1, 1)) %>%
@@ -100,9 +100,9 @@ crossValSigma <- function(sigma, data, derivative = 1){
   train_id <- sample(seq_len(nrow(data)), size = smp_size)
   train <- data[train_id, ]
   test <- data[-train_id, ]
-  mod <- lm(error ~ group*time*DoG, data = train)
+  mod <- lm(fourier_error ~ group*time*DoG, data = train)
   pred <- predict(mod, test)
-  MSE <- mean((na.omit(pred - test$error))^2)
+  MSE <- mean((na.omit(pred - test$fourier_error))^2)
   return(MSE)
 }
 
@@ -122,8 +122,8 @@ data$DoG <- dnorm_deriv1(data$diffstim, mean = 0, sd = sigma)
 data$DoG3 <- dnorm_deriv3(data$diffstim, mean = 0, sd = sigma3)
 
 if(min_SEM < min_SEM3){
-  mod <- lme(error ~ group*time*DoG,  random = ~(1+group)|subject, data = data, na.action = na.omit)
-}else{mod <- lme(error ~ group*time*DoG3, random = ~(1+group)|subject, data = data, na.action = na.omit)
+  mod <- lme(fourier_error ~ group*time*DoG,  random = ~(1+group)|subject, data = data, na.action = na.omit)
+}else{mod <- lme(fourier_error ~ group*time*DoG3, random = ~(1+group)|subject, data = data, na.action = na.omit)
 }
 anova(mod) %>%
   kable(digits = digits, booktabs = TRUE, escape = FALSE,
@@ -147,7 +147,7 @@ mod_fit$pred <- predict(mod, newdata = mod_fit, level = 0)
 ### Serial bias to previous response by group and session
 ```{r }
 serialbiasprevresp <- lapply(gr, function(x) 
-  serial_bias(prevcurr = x$diffresp, error = x$error, window = window, step = step)) %>%
+  serial_bias(prevcurr = x$diffresp, error = x$fourier_error, window = window, step = step)) %>%
   rbindlist(., idcol='id') %>%
   as.data.frame() %>%
   mutate(session = substr(id, 3, 4), group = substr(id, 1, 1)) %>%
@@ -168,7 +168,7 @@ ggplot(serialbiasprevresp, aes(x = x, y = m), color = group) +
 #### Serial bias to previous response - smoothing
 data %>%
   filter(session != 'S5') %>%
-  ggplot(aes(x = diffresp, y = error), color = group) +
+  ggplot(aes(x = diffresp, y = fourier_error), color = group) +
 #  geom_point() +
   stat_smooth(aes(fill = group), color = 'black', method = "loess") +
   geom_hline(yintercept=0, color = "black") +
@@ -183,7 +183,7 @@ data %>%
 #### Folded serial bias to previous response
 ```{r}
 foldedserialbiasprevresp <- lapply(gr, function(x) 
-  folded_serial_bias(prevcurr = x$diffresp, error = x$error, window = window, step = step)) %>%
+  folded_serial_bias(prevcurr = x$diffresp, error = x$fourier_error, window = window, step = step)) %>%
   rbindlist(., idcol='id') %>%
   as.data.frame() %>%
   mutate(session = substr(id, 3, 4), group = substr(id, 1, 1)) %>%
@@ -209,7 +209,7 @@ step = pi/10
 subj_sb <- split(data, 
             list(data$subject, data$session), drop = TRUE)
 subj_foldedserialbias <- lapply(subj_sb, function(x) 
-  folded_serial_bias(prevcurr = x$diffstim, error = x$error, window = window, step = step)) %>%
+  folded_serial_bias(prevcurr = x$diffstim, error = x$fourier_error, window = window, step = step)) %>%
   rbindlist(., idcol='id') %>%
   as.data.frame() %>%
   mutate(session = substr(id, 3, 4), group = substr(id, 1, 1), subject = substr(id, 1, 3)) %>%
@@ -231,7 +231,7 @@ ggplot(subj_foldedserialbias, aes(x = x, y = m), color = group) +
 ### Serial bias to future response by group and session
 ```{r }
 serialbiastofuture <- lapply(gr, function(x) 
-  serial_bias(prevcurr = x$difffuture, error = x$error, window = window, step = step)) %>%
+  serial_bias(prevcurr = x$difffuture, error = x$fourier_error, window = window, step = step)) %>%
   rbindlist(., idcol='id') %>%
   as.data.frame() %>%
   mutate(session = substr(id, 3, 4), group = substr(id, 1, 1)) %>%
@@ -254,7 +254,7 @@ ggplot(serialbiastofuture, aes(x = x, y = m), color = group) +
 
 data %>%
   filter(session != 'S5') %>%
-  ggplot(aes(x = difffuture, y = error), fill = group) +
+  ggplot(aes(x = difffuture, y = fourier_error), fill = group) +
 #  geom_point() +
   stat_smooth(aes(fill = group), color = 'black', method = "loess", span = window) +
   geom_hline(yintercept=0, color = "black") +
@@ -270,7 +270,7 @@ data %>%
 window = pi/5
 step = pi/20
 foldedserialbiastofuture <- lapply(gr, function(x) 
-  folded_serial_bias(prevcurr = x$difffuture, error = x$error, window = window, step = step)) %>%
+  folded_serial_bias(prevcurr = x$difffuture, error = x$fourier_error, window = window, step = step)) %>%
   rbindlist(., idcol='id') %>%
   as.data.frame() %>%
   mutate(session = substr(id, 3, 4), group = substr(id, 1, 1)) %>%
