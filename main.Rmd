@@ -65,7 +65,10 @@ options(knitr.kable.NA = '')
 ```{r child = 'childDocuments/biasPrecisionFourier.Rmd'}
 ```
 
-## Serial bias
+## Serial bias after removing repulsion
 ```{r child = 'childDocuments/serialBiasFourier.Rmd'}
 ```
 
+## Modelling serial bias after removing repulsion
+```{r child = 'childDocuments/modellingSerialBiasFourier.Rmd'}
+```
