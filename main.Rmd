@@ -71,4 +71,6 @@ options(knitr.kable.NA = '')
 
 ## Modelling serial bias after removing repulsion
 ```{r child = 'childDocuments/modellingSerialBiasFourier.Rmd'}
+# set 4th chunk of child (modellingSerialBiasFourier.Rmd) as eval = TRUE
 ```
+
