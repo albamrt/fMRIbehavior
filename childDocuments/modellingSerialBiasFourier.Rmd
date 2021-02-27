@@ -10,75 +10,27 @@ options(knitr.kable.NA = '')
 ```
 
 ```{r}
+setwd("/Users/albamorato/Desktop/NMDA_fMRI_behavior")
 load("data/preproc_data.RData")
 source('helpers/helpers.R')
 source('helpers/settings.R')
 ```
 
 ```{r message = FALSE}
-Sigma <- seq(0.1, 1.9, by = 0.05)
+Sigma <- seq(0.1, 1.8, by = 0.05)
 ```
-
 
 ```{r eval = FALSE}
-groupedData <- data %>%
-  group_by(group, session) %>%
-  nest() %>%
-  mutate(JV10e = map(.x = data, .f = ~mixturer:::bays_2009_error(X = .x$fourier_R, Tg = .x$S_rad))) %>%
-  mutate(JV10 = map(.x = data, .f = ~mixturer:::bays_2009_fit(X = .x$fourier_R, Tg = .x$S_rad, return.ll = TRUE))) %>%
-  mutate(precision = map_dbl(JV10e, 1), 
-         bias = map_dbl(JV10e, 2),
-         L = unlist(map(.x = JV10, .f = ~.x$LL)),
-         K = unlist(map(.x = JV10, .f = ~.x$B['K'])),
-         Pt = unlist(map(.x = JV10, .f = ~.x$B['Pt'])),
-         Pu = unlist(map(.x = JV10, .f = ~.x$B['Pu'])),
-         sd = k2sd(K),
-         precision_mixture = 1/sd,
-         time = unlist(map(data, function(x) unique(x['time'])))) 
 #Cross-validation to find hyperparameter sigma
-groupedData %>%
-  mutate(sim = map(data, function(x) lapply(Sigma, function(y)
-    replicate(1000, crossValSigma(y, x, derivative = 1))))) 
-#save(groupedData, file = '/Users/albamorato/Documents/IDIBAPS/ANMDA/MRI/behaviour/groupedData.RData')
-
-groupedData %>%
-  mutate(sim3 = map(data, function(x) lapply(Sigma, function(y)
-    replicate(1000, crossValSigma(y, x, derivative = 3))))) 
-save(groupedData, file = 'data/groupedData.RData')
-
-groupedData <- groupedData %>%
-  mutate(mean_MSE = map(.x = sim, .f = function(x) unlist(lapply(x, mean))),
-         mean_MSE3 = map(.x = sim3, .f = function(x) unlist(lapply(x, mean))),
-         min_MSE = unlist(map(.x = mean_MSE, .f = min)),
-         min_MSE3 = unlist(map(.x = mean_MSE3, .f = min)),
-         sigma = unlist(map(.x = mean_MSE, .f = function(x) Sigma[x == min_MSE])),
-         sigma3 = unlist(map(.x = mean_MSE3, .f = function(x) Sigma[x == min_MSE3])),
-         data = map2(.x = data, .y = sigma, 
-                     .f = function(x, y) mutate(x, DoG = dnorm_deriv1(x$diffstim, 
-                                                                      mean = 0, sd = y))),
-         data = map2(.x = data, .y = sigma3, 
-                     .f = function(x, y) mutate(x, DoG3 = dnorm_deriv3(x$diffstim, 
-                                                                      mean = 0, sd = y))),
-         mod = pmap(.l = list(d = data, min = min_MSE, min3 = min_MSE3), 
-                    .f = function(d, min, min3) if(min < min3){
-                      lm(fourier_error ~ time*DoG, 
-                          data = d, na.action = na.omit)}else{
-                            lm(fourier_error ~ time*DoG3, 
-                                data = d, na.action = na.omit)}),
-         data = map2(.x = mod, .y = data, 
-                     function(x, y) mutate(y, pred = predict(x, newdata = y, 
-                                                                 level = 0))))
-```
-
-```{r}
-#Cross-validation to find hyperparameter sigma
-sim <- lapply(Sigma, function(x) replicate(100, crossValSigma(x, data, derivative = 1)))
-sim3 <- lapply(Sigma, function(x) replicate(100, crossValSigma(x, data, derivative = 3)))
+sim <- lapply(Sigma, function(x) replicate(1000, 
+                                           crossValSigma(x, data, derivative = 1)))
+sim3 <- lapply(Sigma, function(x) replicate(1000, 
+                                            crossValSigma(x, data, derivative = 3)))
 
 save(sim, sim3, file = "data/sim.RData")
 ```
 
-```{r fig.cap = 'Left: Mean squared error for stratified hyperparameter optimization using cross-validation (1,000 repetitions, training set size = .33 from each subject) for first- (black) and third- (orange) derivative-of-Gaussian fits. Hyperparameters are different values of scale parameter σ of the underlying Gaussian with location hyperparameter $\\mu = 0$. Right: Shape of first- and third-derivative-of-Gaussian fits with optimal hyperparameter $\\sigma$ and $\\mu = 0$.'}
+```{r fig.cap = 'Left: Mean squared error for stratified hyperparameter optimization using cross-validation (1,000 repetitions, training set size = .33 from each subject) for first- (black) and third- (orange) derivative-of-Gaussian fits. Hyperparameters are different values of scale parameter σ of the underlying Gaussian with location hyperparameter $\\mu = 0$. Right: Shape of first- and third-derivative-of-Gaussian fits with optimal hyperparameter $\\sigma$ and $\\mu = 0$.', out.width='49%', fig.ncol = 2}
 load(file = 'data/sim.RData')
 
 mean_MSE <- unlist(lapply(sim, mean))
@@ -89,61 +41,256 @@ mean_MSE3 <- unlist(lapply(sim3, mean))
 min_MSE3 <- min(mean_MSE3)
 sigma3 <- Sigma[mean_MSE3 == min_MSE3]
 
-data$DoG <- dog1(sigma = sigma, x = data$diffstim)
-data$DoG3 <- dog3(sigma = sigma, x = data$diffstim)
-
 diffstims <- seq(-pi/2, pi/2, length.out = 30)
-
 DoG <- dog1(sigma = sigma, x = diffstims)
-DoG3 <- dog3(sigma = sigma, x = diffstims)
+DoG3 <- dog3(sigma = sigma3, x = diffstims)
 
-par(mfrow = c(1, 2))
-plot(mean_MSE, Sigma, type = 'l', 
-     xlim = c(min(c(mean_MSE, mean_MSE3)), max((c(mean_MSE, mean_MSE3)))),
-     xlab = 'MSE', ylab = bquote(sigma))
-lines(mean_MSE3, Sigma, col = 'orange')
+if (DoG[6] > 0){
+  DoG <- DoG*-1
+}
+if (DoG3[6] > 0){
+  DoG3 <- DoG3*-1
+}
 
-plot(diffstims, DoG, type = 'l', 
-     ylim = c(min(na.omit(c(DoG, DoG3))), max(na.omit((c(DoG, DoG3))))))
-lines(diffstims, DoG3, col = 'orange')
+# par(mfrow = c(1, 2))
+# plot(Sigma, mean_MSE, type = 'l', 
+#      ylim = c(min(c(mean_MSE, mean_MSE3)), max((c(mean_MSE, mean_MSE3)))),
+#      xlab = bquote(sigma), ylab = 'MSE')
+# lines(Sigma, mean_MSE3, col = 'orange')
+# 
+# plot(diffstims, DoG, type = 'l', 
+#      ylim = c(min(na.omit(c(DoG, DoG3))), max(na.omit((c(DoG, DoG3))))))
+# lines(diffstims, DoG3, col = 'orange')
+
+
+Sim <- as.data.frame(t(do.call(rbind, sim)))
+colnames(Sim) <- paste(Sigma)
+Sim_long <- gather(Sim, sigma, MSE, colnames(Sim)[1]:colnames(Sim)[length(colnames(Sim))], factor_key=TRUE)
+
+Sim3 <- as.data.frame(t(do.call(rbind, sim3)))
+colnames(Sim3) <- paste(Sigma)
+Sim3_long <- gather(Sim3, sigma, MSE, colnames(Sim3)[1]:colnames(Sim3)[length(colnames(Sim3))], factor_key=TRUE)
+
+ggplot(Sim_long, aes(x=sigma, y=MSE, group=1), color = 'black') +
+  stat_summary(fun.data = mean_se, geom = "ribbon",
+               fill = "black", alpha = 0.4) + 
+  stat_summary(fun = mean, geom = "line", lwd = 2, color = 'black') + 
+  stat_summary(data = Sim3_long, fun.data = mean_se, geom = "ribbon",
+               fill = "orange", alpha = 0.4) + 
+  stat_summary(data = Sim3_long, fun = mean, geom = "line", 
+               lwd = 2, color = 'orange') + 
+  scale_x_discrete(breaks=seq(0.5, 2, 0.5))
+
+
+text1 <- sprintf("\"1st DoG:\" ~ sigma == %0.2f", sigma)
+text2 <- sprintf("\"3rd DoG:\" ~ sigma == %0.2f", sigma3)
+
+data.frame('diffstims' = diffstims, 'DoG' = DoG, 'DoG3' = DoG3) %>%
+  ggplot() +
+  geom_line(aes(x = diffstims, y=DoG), color = 'black') + 
+  geom_line(aes(x = diffstims, y=DoG3), color = 'orange') +
+  annotate("text", x = 0.5, y = -0.7, color = 'black', parse = T,
+           label = as.character(text1)) +
+  annotate("text", x = 0.5, y = -0.9, color = 'orange', parse = T,
+               label = as.character(text2))
 ```
 
+```{r echo = FALSE}
+isFirstDoGBetter <- min_MSE < min_MSE3
+isThirdDoGBetter <- min_MSE3 < min_MSE
+```
+
+```{r eval = isFirstDoGBetter, results='asis'}
+cat(paste("After cross-validation we observe that we obtain the lowest MSE with the first derivative of Gaussian, with a sigma parameter of ", sigma, "."))
+```
+
+```{r eval = isThirdDoGBetter, results='asis'}
+cat(paste0("After cross-validation we observe that we obtain the lowest MSE with the third derivative of Gaussian, with a sigma parameter of ", sigma3, "."))
+```
 
 ```{r}
 if(min_MSE < min_MSE3){
-  mod <- lme(fourier_error ~ group*time*DoG,  random = ~(1+group+time)|subject, 
-             data = data, na.action = na.omit)
-}else{mod <- lme(fourier_error ~ group*time*DoG3, random = ~(1+group)|subject, 
-                 data = data, na.action = na.omit)
+  if (DoG[6] > 0){
+    data$DoG <- dog1(sigma = sigma, x = data$diffstim)*-1
+    }else{
+    data$DoG <- dog1(sigma = sigma, x = data$diffstim)
+    }}else{
+      if (DoG3[6] > 0){
+      data$DoG <- dog3(sigma = sigma, x = data$diffstim)*-1
+      }else{
+      data$DoG <- dog3(sigma = sigma, x = data$diffstim)
+      }
 }
+```
 
-summary(mod)$tTable %>%
-  kable(digits = digits, booktabs = TRUE, escape = FALSE,
-        caption = 'Summary of a linear model where the response is the error and regressors are group, time, a derivative of gaussian and its interaction.') %>%
-    kable_styling(latex_options = "HOLD_position", 
+### Model for serial bias
+
+```{r}
+####### MODEL - SOURCES OF VARIABILITY:
+# - factor group: enc, sch, ctr 
+# - the subjects in the experiment: nested to group 
+# - measures along time: crossed to the other 2 factors, 4 levels, fixed between-subjects factor  
+# - bias of each subject (DoG), crossed to the other 3 factors, 4 levels, fixed between-subjects factor  
+# - any other non-controlled variability source is captured by the error term
+
+models <- list()
+
+# no random factors:
+models[[1]] <- lm(fourier_error ~ group*time*DoG, data, na.action = na.omit)
+
+# random intercept model:
+models[[2]] <- lme(fourier_error ~ group*time*DoG,  random = ~1|subject, 
+            data, na.action = na.omit)
+
+# random intercept model + subject nested in group:
+models[[3]] <- lme(fourier_error ~ group*time*DoG,  random = ~1|group/subject, 
+            data, na.action = na.omit)
+
+# random slope for DoG:
+models[[4]] <- lme(fourier_error ~ group*time*DoG,  random = ~(-1+DoG)|subject, 
+            data, na.action = na.omit)
+
+# random slope for DoG + subject nested in group:
+models[[5]] <- lme(fourier_error ~ group*time*DoG,  
+                   random = ~(-1+DoG)|group/subject,
+                   data, na.action = na.omit)
+
+# random slope for time:
+models[[6]] <- lme(fourier_error ~ group*time*DoG,  random = ~(-1+time)|subject, 
+            data, na.action = na.omit)
+
+# random slope for time + subject nested in group:
+models[[7]] <- lme(fourier_error ~ group*time*DoG,  
+                   random = ~(-1+time)|group/subject, 
+                   data, na.action = na.omit)
+
+# random intercept + random slope for DoG:
+models[[8]] <- lme(fourier_error ~ group*time*DoG,  random = ~(1+DoG)|subject, 
+            data, na.action = na.omit)
+
+# random intercept + random slope for DoG + subject nested in group:
+models[[9]] <- lme(fourier_error ~ group*time*DoG, 
+                   random = ~(1+DoG)|group/subject, 
+            data, na.action = na.omit)
+
+# random intercept + random slope for time:
+models[[10]] <- lme(fourier_error ~ group*time*DoG,  
+                    random = ~(1+time)|subject, 
+            data, na.action = na.omit)
+
+# random intercept + random slope for time + subject nested in group:
+models[[11]] <- lme(fourier_error ~ group*time*DoG,  
+                    random = ~(1+time)|group/subject, 
+            data, na.action = na.omit)
+
+# random intercept + random slope for DoG & time:
+models[[12]] <- lme(fourier_error ~ group*time*DoG,  
+                    random = ~(1+DoG+time)|subject, 
+            data, na.action = na.omit)
+
+# random intercept + random slope for DoG & time + subject nested in group:
+models[[13]] <- lme(fourier_error ~ group*time*DoG,  
+                    random = ~(1+DoG+time)|group/subject, 
+            data, na.action = na.omit)
+
+# random slope for DoG & time:
+models[[14]] <- lme(fourier_error ~ group*time*DoG, 
+                    random = ~(-1+DoG+time)|subject, 
+            data, na.action = na.omit)
+
+# random slope for DoG & time + subject nested in group:
+models[[15]] <- lme(fourier_error ~ group*time*DoG,  
+                    random = ~(-1+DoG+time)|group/subject, 
+            data, na.action = na.omit)
+
+# random intercept + random slope for DoG & time & its interaction:
+models[[16]] <- lme(fourier_error ~ group*time*DoG,  
+           random = ~(1+DoG+time+DoG:time)|subject, 
+            data, na.action = na.omit)
+
+# random intercept + random slope for DoG & time & its interaction + subject nested in group:
+models[[17]] <- lme(fourier_error ~ group*time*DoG,  
+             random = ~(1+DoG+time+DoG:time)|group/subject, 
+            data, na.action = na.omit)
+
+# random slope for DoG & time & its interaction:
+models[[18]] <- lme(fourier_error ~ group*time*DoG,  
+           random = ~(-1+DoG+time+DoG:time)|subject, 
+            data, na.action = na.omit)
+
+# random slope for DoG & time & its interaction + subject nested in group:
+models[[19]] <- lme(fourier_error ~ group*time*DoG,  
+             random = ~(-1+DoG+time+DoG:time)|group/subject, 
+            data, na.action = na.omit)
+
+# random intercept + random slope for the interaction of DoG & time:
+models[[20]] <- lme(fourier_error ~ group*time*DoG,  
+           random = ~(1+DoG+time+DoG:time)|subject, 
+            data, na.action = na.omit)
+
+# random intercept + random slope for the interaction of DoG & time + subject nested in group:
+models[[21]] <- lme(fourier_error ~ group*time*DoG,  
+             random = ~(1+DoG+time+DoG:time)|group/subject, 
+            data, na.action = na.omit)
+
+# random slope for the interaction of DoG & time:
+models[[22]] <- lme(fourier_error ~ group*time*DoG,  
+           random = ~(-1+DoG+time+DoG:time)|subject, 
+            data, na.action = na.omit)
+
+# random slope for the interaction of DoG & time + subject nested in group:
+models[[23]] <- lme(fourier_error ~ group*time*DoG,  
+             random = ~(-1+DoG+time+DoG:time)|group/subject, 
+            data, na.action = na.omit)
+```
+
+```{r}
+AICS <- sapply(models, AIC)
+mod <- models[[which.min(AICS)]]
+```
+
+The final model (the one with the lowest AIC) is:
+```{r results = TRUE}
+mod$call
+```
+
+With the following coefficients:
+```{r}
+if(is.numeric(mod$coefficients)){
+  kable(mod$coefficients, digits = digits, 
+        booktabs = TRUE, escape = FALSE)%>%
+  kable_styling(latex_options = "HOLD_position", 
                 bootstrap_options = "striped", full_width = F)
+}
+if(is.list(mod$coefficients)){
+  kable(fixef(mod),  
+        booktabs = TRUE, escape = FALSE, digits = 7)%>%
+  kable_styling(latex_options = "HOLD_position", 
+                bootstrap_options = "striped", full_width = F)
+}
+```
 
-anova(mod) %>%
-  kable(digits = digits, booktabs = TRUE, escape = FALSE,
-        caption = 'Anova of a linear model where the response is the error and regressors are group, time, a derivative of gaussian and its interaction.') %>%
-    kable_styling(latex_options = "HOLD_position", 
+And the following anova table:
+```{r}
+kable(anova(mod), digits = digits, 
+        booktabs = TRUE, escape = FALSE)%>%
+  kable_styling(latex_options = "HOLD_position", 
                 bootstrap_options = "striped", full_width = F)
 ```
+
 
 ```{r}
 # Predictions:
 mod_fit <- data.frame(x = data[,'diffstim'], group = data[, 'group'], 
-                      time = data[,'time'], subject = data[,'subject'])
-mod_fit$session <- factor(mod_fit$time, levels = c(0, 0.25, 0.5, 1, 2), labels = c('S1', 'S2', 'S3', 'S4', 'S5'))
-if('DoG' %in% names(mod$coefficients$fixed)){
-  mod_fit$DoG <- dnorm_deriv1(mod_fit$x, mean = 0, sd = sigma)
-}else{mod_fit$DoG3 <- dnorm_deriv3(mod_fit$x, mean = 0, sd = sigma3)
-}
+                      time = data[,'time'], subject = data[,'subject'],
+                      DoG = data$DoG)
+mod_fit$session <- factor(mod_fit$time, levels = c(0, 0.25, 0.5, 1), 
+                          labels = c('S1', 'S2', 'S3', 'S4'))
 mod_fit <- mod_fit[complete.cases(mod_fit),]
 mod_fit$pred <- predict(mod, newdata = mod_fit, level = 0)
 ```
 
-### Serial bias
+### Plotting serial bias
 ```{r warning = FALSE, fig.cap = 'Dashed lines show the mean serial bias. Shading, $\\pm$ s.e.m. Solid lines show linear model fits.'}
 window = pi/3
 step = pi/20
@@ -282,7 +429,7 @@ data %>%
   labs(x = "Difference previous - current stimulus", y = 'Error') 
 ```
 
-### Mean folded serial bias by roup and session
+### Mean folded serial bias by group and session
 ```{r}
 groupedSubjSes <- data %>%
   group_by(session, subject) %>%
@@ -294,6 +441,19 @@ groupedSubjSes <- data %>%
                        step = step)),
     mean_folded = unlist(map(foldedserialbias, function(x) mean(x$m, na.rm = TRUE))))
 
+if(min_MSE < min_MSE3){
+  newdat <- expand.grid(group = levels(data$group), time = unique(data$time), 
+                               DoG = mean(DoG, na.rm = TRUE),
+                        subject = levels(data$subject))
+}else{
+  newdat <- expand.grid(group = levels(data$group), time = unique(data$time), 
+                               DoG3 = mean(DoG3, na.rm = TRUE),
+                        subject = levels(data$subject))
+}
+newdat$pred <- predict(mod, newdat)
+```
+
+```{r fig.cap = 'Mean folded serial bias by subect. Its mean and error bars are also plotted. The romboid is the predicted value by the mixed model.'}
 groupedSubjSes %>%
   group_by(group, session) %>%
   nest() %>%
@@ -310,7 +470,7 @@ groupedSubjSes %>%
     width = 0.05 * n()
   ) %>%
   ggplot(aes(x = time, y = m, color = group)) +
-  geom_point(position = position_dodge(width = 0.15)) + 
+  geom_point(position = position_dodge(width = 0.15), shape = 3) + 
   geom_errorbar(aes(ymin = lower, ymax = upper, color = group, width = width), 
                 position = position_dodge(width = 0.15)) +
   geom_point(data = groupedSubjSes, aes(x = time, y = mean_folded, 
@@ -319,7 +479,169 @@ groupedSubjSes %>%
                                              jitter.width = 0.05), 
              alpha = 0.3) +
   geom_hline(yintercept=0) +
-  facet_grid(vars(group), vars(session)) +
+  #facet_grid(vars(group)) +
   scale_color_manual(values=colors) +
-  ylab('Mean folded serial bias')
+  ylab('Mean folded serial bias') + 
+  geom_point(aes(x = time, y = pred, color = group), data = newdat, 
+             position = position_dodge(width = 0.15), shape = 9) 
 ```
+
+```{r eval = FALSE}
+newdat %>%
+  ggplot(aes(x = time, y = pred, color = group)) +
+  geom_point(position = position_dodge(width = 0.15), shape = 3) + 
+  # geom_point(data = newdat, aes(x = time, y = pred, 
+  #                                       colour = group),  
+  #            position = position_jitterdodge(dodge.width = 0.15,
+  #                                            jitter.width = 0.05), 
+  #            alpha = 0.3) +
+  geom_hline(yintercept = 0) +
+  scale_color_manual(values=colors)
+
+mod <- update(mod, .~., method = 'REML')
+plot(ranef(mod), axes = F, pch = 16, col = 'black') 
+plot(1:nrow(coef(summary(mod))), coef(summary(mod))[,1], pch = 16, col = 'black',
+     axes = F)
+stdErrors <- coef(summary(mod))[,2]
+segments(x0 = 1:length(stdErrors), x1 = 1:length(stdErrors), 
+         y0 = coef(summary(mod))[,1] - stdErrors, y1 = coef(summary(mod))[,1] + stdErrors, col = 'black')
+axis(2)
+abline(h = 0, col = 'gray', lty = 2)
+axis(1, at = 1:length(stdErrors),
+     labels = rownames(coef(summary(mod))), cex.axis = 0.7)
+```
+
+```{r eval = FALSE, fig.cap = 'Mixed model predictions.'}
+coef = fixed.effects(mod) 
+dog = na.omit(DoG)
+mdog = mean(dog)
+
+ctrl0 = coef['DoG']*mdog                                      
+ctrl025 = coef['DoG']*mdog + coef['time']*0.25 + coef['time:DoG']*mdog*0.25               
+ctrl05 = coef['DoG']*mdog + coef['time']*0.5 + coef['time:DoG']*mdog*0.5
+ctrl1 = coef['DoG']*mdog + coef['time']*1 + coef['time:DoG']*mdog*1 
+
+enc0 = coef['DoG']*mdog + coef['groupE'] + coef['groupE:DoG']*mdog                           
+enc025 = coef['DoG']*mdog + coef['groupE'] + coef['time']*0.25 + 
+  coef['groupE:DoG']*mdog + coef['time:DoG']*mdog*0.25 + coef['groupE:time']*0.25 + 
+  coef['groupE:time:DoG']*0.25*mdog 
+enc05 = coef['DoG']*mdog + coef['groupE'] + coef['time']*0.5 + 
+  coef['groupE:DoG']*mdog + coef['time:DoG']*mdog*0.5 + coef['groupE:time']*0.5 + 
+  coef['groupE:time:DoG']*0.5*mdog    
+enc1 = coef['DoG']*mdog + coef['groupE'] + coef['time']*1 + 
+  coef['groupE:DoG']*mdog + coef['time:DoG']*mdog*1 + coef['groupE:time']*1 + 
+  coef['groupE:time:DoG']*1*mdog    
+
+schz0 = coef['DoG']*mdog + coef['groupS'] + coef['groupS:DoG']*mdog                                        
+schz025 = coef['DoG']*mdog + coef['groupS'] + coef['time']*0.25 + 
+  coef['groupS:DoG']*mdog + coef['time:DoG']*mdog*0.25 + coef['groupS:time']*0.25 + 
+  coef['groupS:time:DoG']*0.25*mdog
+schz05 = coef['DoG']*mdog + coef['groupS'] + coef['time']*0.5 + 
+  coef['groupS:DoG']*mdog + coef['time:DoG']*mdog*0.5 + coef['groupS:time']*0.5 + 
+  coef['groupS:time:DoG']*0.5*mdog
+schz1 = coef['DoG']*mdog + coef['groupS'] + coef['time']*1 + 
+  coef['groupS:DoG']*mdog + coef['time:DoG']*mdog*1 + coef['groupS:time']*1 + 
+  coef['groupS:time:DoG']*1*mdog
+
+######################
+######################
+
+grps = substr(unique(data$subject), 1,1)
+ctrl = grps == 'C'
+enc = grps == 'E'
+schz = grps == 'S'
+
+######################
+######################
+
+# random effects
+arand = random.effects(mod) 
+
+arandctrl = arand[ctrl, 1] + arand[ctrl, 2]    
+rctrl0 = ctrl0 + arandctrl                                         
+rctrl025 = ctrl025 + arandctrl                
+rctrl05 = ctrl05 + arandctrl     
+rctrl1 = ctrl1 + arandctrl
+
+arandenc = arand[enc, 1] + arand[enc, 2]    
+renc0 = enc0 + arandenc                          
+renc025 = enc025 + arandenc 
+renc05 = enc05 + arandenc
+renc1 = enc1 + arandenc
+
+arandschz = arand[schz, 1] + arand[schz, 2]    
+rschz0 = schz0 + arandschz                                      
+rschz025 = schz0 + arandschz
+rschz05 = schz0 + arandschz
+rschz1 = schz0 + arandschz
+
+##################################################################
+##################################################################
+
+require(scales)
+par(mfrow = c(1,1))
+ylims = c(min(c(rctrl0, rctrl025, rctrl05, rctrl1,
+               renc0, renc025, renc05, renc1,
+               rschz0, rschz025, rschz05, rschz1
+               ), na.rm = TRUE),
+         max(c(rctrl0, rctrl025, rctrl05, rctrl1,
+               renc0, renc025, renc05, renc1,
+               rschz0, rschz025, rschz05, rschz1
+         ), na.rm = TRUE))
+denom <- 50
+plot(-0.05 + rnorm(sum(ctrl))/denom, rctrl0, col = alpha(colors['C'], alpha = 0.4), pch = 16,
+     xlim = c(-0.1, 1.1), ylim = ylims)
+points(0 + rnorm(sum(enc))/denom, renc0, col = alpha(colors['E'], alpha = 0.4), pch = 16)
+points(0.05 + rnorm(sum(schz))/denom, rschz0, col = alpha(colors['S'], alpha = 0.4), pch = 16)
+
+points(0.2 + rnorm(sum(ctrl))/denom, rctrl025, col = alpha(colors['C'], alpha = 0.4), pch = 16,
+     xlim = c(0,4), 
+     ylim = c(min(c(rctrl0, renc0, rschz0), na.rm = TRUE), max(c(rctrl0, renc0, rschz0), na.rm = TRUE)))
+points(0.25 + rnorm(sum(enc))/denom, renc0, col = alpha(colors['E'], alpha = 0.4), pch = 16)
+points(0.3 + rnorm(sum(schz))/denom, rschz0, col = alpha(colors['S'], alpha = 0.4), pch = 16)
+
+points(0.45 + rnorm(sum(ctrl))/denom, rctrl0, col = alpha(colors['C'], alpha = 0.4), pch = 16,
+       xlim = c(0,4), 
+       ylim = c(min(c(rctrl0, renc0, rschz0), na.rm = TRUE), max(c(rctrl0, renc0, rschz0), na.rm = TRUE)))
+points(0.5 + rnorm(sum(enc))/denom, renc0, col = alpha(colors['E'], alpha = 0.4), pch = 16)
+points(0.55 + rnorm(sum(schz))/denom, rschz0, col = alpha(colors['S'], alpha = 0.4), pch = 16)
+
+
+points(0.95 + rnorm(sum(ctrl))/denom, rctrl0, col = alpha(colors['C'], alpha = 0.4), pch = 16,
+       xlim = c(0,4), 
+       ylim = c(min(c(rctrl0, renc0, rschz0), na.rm = TRUE), max(c(rctrl0, renc0, rschz0), na.rm = TRUE)))
+points(1 + rnorm(sum(enc))/denom, renc0, col = alpha(colors['E'], alpha = 0.4), pch = 16)
+points(1.05 + rnorm(sum(schz))/denom, rschz0, col = alpha(colors['S'], alpha = 0.4), pch = 16)
+```
+
+
+### Modelling serial bias to future response:
+```{r}
+if(min_MSE < min_MSE3){
+  if (DoG[6] > 0){
+    data$futureDoG <- dog1(sigma = sigma, x = data$difffuture)*-1
+    }else{
+    data$futureDoG <- dog1(sigma = sigma, x = data$difffuture)
+    }}else{
+      if (DoG3[6] > 0){
+      data$futureDoG <- dog3(sigma = sigma, x = data$difffuture)*-1
+      }else{
+      data$futureDoG <- dog3(sigma = sigma, x = data$difffuture)
+      }
+    }
+
+modFuture <- lm(fourier_error ~ group * time * futureDoG, data = data)
+```
+
+The linear model looks like this:
+```{r}
+modFuture$call
+```
+
+And its associated anova table is:
+```{r}
+kable(anova(modFuture), digits = digits, booktabs = TRUE, escape = FALSE)%>%
+  kable_styling(latex_options = "HOLD_position", 
+                bootstrap_options = "striped", full_width = F)
+```
+
